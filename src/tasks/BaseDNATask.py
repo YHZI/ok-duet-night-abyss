@@ -214,6 +214,8 @@ class BaseDNATask(BaseTask):
     def find_not_use_letter_icon(self, threshold: float = 0, box: Box | None = None, template=None) -> Box | None:
         if isinstance(box, Box):
             self.draw_boxes(box.name, box, "blue")
+        else:
+            box = self.box_of_screen(0.4552, 0.3954, 0.4927, 0.4648, name="not_use_letter", hcenter=True)
         return self.find_one('not_use_letter', threshold=threshold, box=box, template=template)
 
     def safe_get(self, key, default=None):

@@ -68,7 +68,7 @@ class CommissionsTask(BaseDNATask):
 
     def find_letter_btn(self, threshold=0):
         return self.find_start_btn(
-            threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 1630, 852, 1884, 920, name="letter_btn",
+            threshold=threshold, box=self.box_of_screen(0.6328, 0.6229, 0.7417, 0.6667, name="letter_btn",
                                                                hcenter=True))
 
     def find_letter_reward_btn(self, threshold=0):
@@ -215,14 +215,12 @@ class CommissionsTask(BaseDNATask):
         action_timeout = self.action_timeout if timeout == 0 else timeout
         if self.commission_config.get("自动处理密函", False):
             if self.find_letter_interface():
-                box = self.box_of_screen_scaled(2560, 1440, 1170, 610, 2450, 820, name="letter_drag_area", hcenter=True)
-                letter_roi = self.box_of_screen_scaled(2560, 1440, 565, 651, 732, 805, name="letter_roi", hcenter=True)
-                letter_snapshot = letter_roi.crop_frame(self.frame)
+                box = self.box_of_screen(0.4432, 0.3556, 0.9750, 0.6037, name="letter_drag_area", hcenter=True)
+                not_use_edge = self.box_of_screen(0.4443, 0.3630, 0.4526, 0.4991, name="not_use_edge", hcenter=True)
                 self.sleep(0.1)
-
                 for _ in range(2):
-                    self.click_relative_random(0.533, 0.444, 0.575, 0.547, use_safe_move=True, safe_move_box=box, down_time=0.02, after_sleep=0.1)
-                    if self.wait_until(lambda: not self.find_one(template=letter_snapshot, box=letter_roi, threshold=0.7), time_out=1):
+                    self.click_relative_random(0.5120, 0.3815, 0.5531, 0.4667, use_safe_move=True, safe_move_box=box, down_time=0.02, after_sleep=0.1)
+                    if self.wait_until(lambda: self.calculate_color_percentage(white_color, not_use_edge) < 0.05, time_out=1):
                         break
                 else:
                     self.log_info_notify("密函已耗尽")
@@ -511,9 +509,10 @@ class CommissionsTask(BaseDNATask):
         safe_box = self.box_of_screen_scaled(2560, 1440, 125, 207, 1811, 1234, name="safe_box", hcenter=True)
         self.wait_until(
             condition=lambda: self.find_start_btn(box=confirm_box),
-            post_action=lambda: self.click_relative_random(0.500, 0.349, 0.691, 0.382, use_safe_move=True, safe_move_box=safe_box),
+            post_action=lambda: self.click_relative_random(0.5016, 0.4074, 0.6906, 0.4380, use_safe_move=True, safe_move_box=safe_box),
             time_out=10,
         )
+        self.sleep(0.25)
         safe_box = self.box_of_screen_scaled(2560, 1440, 1298, 772, 1735, 846, name="safe_box", hcenter=True)
         if not self.wait_until(condition=self.in_team, post_action=lambda: self.click_relative_random(0.531, 0.547, 0.671, 0.578, after_sleep=0.5, use_safe_move=True, safe_move_box=safe_box),
                                time_out=10):
@@ -592,6 +591,12 @@ round_info_color = {
     'r': (200, 255),  # Red range
     'g': (200, 255),  # Green range
     'b': (200, 255)  # Blue range
+}
+
+white_color = {
+    'r': (245, 255),  # Red range
+    'g': (245, 255),  # Green range
+    'b': (245, 255)  # Blue range
 }
 
 def _default_movement():
