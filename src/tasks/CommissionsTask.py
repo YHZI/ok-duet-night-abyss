@@ -406,7 +406,7 @@ class CommissionsTask(BaseDNATask):
         if self.wave_future and self.wave_future.done():
             texts = self.wave_future.result()
             self.wave_future = None
-            if texts and len(texts) == 1:
+            if texts and len(texts) >= 1:
                 prev_wave = self.current_wave
                 if (m := re.match(r"(\d)/\d", texts[0].name)):
                     self.current_wave = int(m.group(1))
