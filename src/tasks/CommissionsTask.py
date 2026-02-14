@@ -512,7 +512,7 @@ class CommissionsTask(BaseDNATask):
             post_action=lambda: self.click_relative_random(0.5016, 0.4074, 0.6906, 0.4380, use_safe_move=True, safe_move_box=safe_box),
             time_out=10,
         )
-        self.sleep(0.25)
+        self.sleep(0.5)
         safe_box = self.box_of_screen_scaled(2560, 1440, 1298, 772, 1735, 846, name="safe_box", hcenter=True)
         self.wait_until(
             condition=lambda: not self.find_start_btn(box=confirm_box),
