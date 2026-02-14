@@ -91,9 +91,9 @@ config = {
     'global_configs': [key_config_option, sensitivity_config_option, afk_config_option, monthly_card_config_option],
     'screenshot_processor': make_bottom_right_black, # 在截图的时候对frame进行修改, 可选
     'gui_icon': 'icons/icon.png', #窗口图标, 最好不需要修改文件名
-    'wait_until_before_delay': 0,
-    'wait_until_check_delay': 0,
-    'wait_until_settle_time': 0, #调用 wait_until时候, 在第一次满足条件的时候, 会等待再次检测, 以避免某些滑动动画没到预定位置就在动画路径中被检测到
+    'wait_until_before_delay': 0.1,
+    'wait_until_check_delay': 0.1,
+    'wait_until_settle_time': 0.1, #调用 wait_until时候, 在第一次满足条件的时候, 会等待再次检测, 以避免某些滑动动画没到预定位置就在动画路径中被检测到
     'ocr': { #可选, 使用的OCR库
         'lib': 'onnxocr',
         'params': {
@@ -112,6 +112,7 @@ config = {
         'url': 'https://dna.yingxiong.com/cloudgame/',
         'resolution': (1600, 900),
         'nick': '云游戏(需要Win11并安装Edge)',
+        'capture_method': ['BitBlt'],  # 浏览器模式不支持 WGC，使用 BitBlt
     },
     'start_timeout': 120,  # default 60
     'window_size': { #ok-script窗口大小
@@ -152,7 +153,7 @@ config = {
         </p>
     """,
     'screenshots_folder': "screenshots", #截图存放目录, 每次重新启动会清空目录
-    'gui_title': 'ok-dna',  # Optional
+    'gui_title': 'Safer-dna',  # Optional
     'template_matching': {
         'coco_feature_json': os.path.join('assets', 'result.json'), #coco格式标记, 需要png图片, 在debug模式运行后, 会对进行切图仅保留被标记部分以减少图片大小
         'default_horizontal_variance': 0.002, #默认x偏移, 查找不传box的时候, 会根据coco坐标, match偏移box内的
@@ -160,7 +161,7 @@ config = {
         'default_threshold': 0.8, #默认threshold
         'feature_processor': process_feature,
     },
-    'version': version, #版本
+    'version': "test-version 0.1", #版本
     'my_app': ['src.globals', 'Globals'], # 全局单例对象, 可以存放加载的模型, 使用og.my_app调用
     'onetime_tasks': [  # tasks to execute
         ["src.tasks.config.CommissionConfig", "CommissionConfig"],

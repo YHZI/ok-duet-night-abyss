@@ -1,5 +1,6 @@
 import re
 import time
+import random
 import numpy as np
 import cv2
 from enum import Enum
@@ -90,6 +91,11 @@ class CommissionsTask(BaseDNATask):
         found = False
         start = time.time()
         while time.time() - start < time_out:
+            # 按键前先移动鼠标，模拟真实用户行为
+            random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
+            random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
+            self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
+            self.sleep(random.uniform(0.02, 0.05))
             self.send_key("esc")
             if self.wait_until(self.find_esc_menu, time_out=2, raise_if_not_found=False):
                 found = True
@@ -106,6 +112,11 @@ class CommissionsTask(BaseDNATask):
         start_time = time.time()
         while time.time() - start_time < action_timeout:
             if self.find_retry_btn():
+                # 按键前先移动鼠标，模拟真实用户行为
+                random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
+                random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
+                self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
+                self.sleep(random.uniform(0.02, 0.05))
                 self.send_key("r", after_sleep=0.2)
             elif (btn := self.find_bottom_start_btn() or self.find_big_bottom_start_btn()):
                 self.click_btn_random(btn, safe_move_box=box, after_sleep=0.2)
@@ -491,20 +502,32 @@ class CommissionsTask(BaseDNATask):
             return True
 
     def reset_and_transport(self):
+        from ok import Logger
+        logger = Logger.get_logger(__name__)
+        
+        logger.info("[复位] 开始复位传送流程")
         self.open_in_mission_menu()
+        
+        logger.debug("[复位] 等待ESC菜单关闭")
         self.wait_until(
             condition=lambda: not self.find_esc_menu(),
             post_action=self.click_relative_random(0.688, 0.875, 0.770, 0.956),
             time_out=10,
         )
+        
+        logger.debug("[复位] 查找设置-其他选项")
         setting_box = self.box_of_screen_scaled(2560, 1440, 738, 4, 1123, 79, name="other_section", hcenter=True)
         setting_other = self.wait_until(lambda: self.find_one("setting_other", box=setting_box), time_out=10,
                                         raise_if_not_found=True)
+        
+        logger.debug("[复位] 点击设置-其他并等待选中")
         self.wait_until(
             condition=lambda: self.calculate_color_percentage(setting_menu_selected_color, setting_other) > 0.24,
             post_action=lambda: self.click_box_random(setting_other),
             time_out=10,
         )
+        
+        logger.debug("[复位] 点击复位按钮")
         confirm_box = self.box_of_screen_scaled(2560, 1440, 1298, 776, 1368, 843, name="confirm_btn", hcenter=True)
         safe_box = self.box_of_screen_scaled(2560, 1440, 125, 207, 1811, 1234, name="safe_box", hcenter=True)
         self.wait_until(
@@ -512,6 +535,8 @@ class CommissionsTask(BaseDNATask):
             post_action=lambda: self.click_relative_random(0.5016, 0.4074, 0.6906, 0.4380, use_safe_move=True, safe_move_box=safe_box),
             time_out=10,
         )
+        
+        logger.debug("[复位] 确认复位操作")
         self.sleep(0.25)
         safe_box = self.box_of_screen_scaled(2560, 1440, 1298, 772, 1735, 846, name="safe_box", hcenter=True)
         self.wait_until(
@@ -519,9 +544,14 @@ class CommissionsTask(BaseDNATask):
             post_action=lambda: self.click_relative_random(0.531, 0.547, 0.671, 0.578, after_sleep=0.5, use_safe_move=True, safe_move_box=safe_box),
             time_out=10,
         )
-        if not self.wait_until(self.in_team, time_out=10):
+        
+        logger.debug("[复位] 等待返回队伍界面（超时20秒）")
+        if not self.wait_until(self.in_team, time_out=20):
+            logger.error("[复位] 20秒内未检测到返回队伍界面，复位失败")
             self.ensure_main()
             return False
+        
+        logger.info("[复位] 复位传送完成")
         return True
 
     def find_letter_interface(self):

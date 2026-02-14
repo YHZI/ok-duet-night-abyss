@@ -7,6 +7,8 @@ import win32api
 import win32con
 import random
 from collections import deque
+import ctypes
+from ctypes import wintypes
 
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +24,319 @@ f_black_color = {
     'g': (0, 20),  # Green range
     'b': (0, 20)  # Blue range
 }
+
+# ============ 键盘和鼠标输入硬件伪装模块 ============
+# 先定义 ctypes 结构体
+class _KeyboardInput(ctypes.Structure):
+    """键盘输入结构"""
+    _fields_ = [
+        ('wVk', wintypes.WORD),
+        ('wScan', wintypes.WORD),
+        ('dwFlags', wintypes.DWORD),
+        ('time', wintypes.DWORD),
+        ('dwExtraInfo', ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class _MouseInput(ctypes.Structure):
+    """鼠标输入结构"""
+    _fields_ = [
+        ('dx', wintypes.LONG),
+        ('dy', wintypes.LONG),
+        ('mouseData', wintypes.DWORD),
+        ('dwFlags', wintypes.DWORD),
+        ('time', wintypes.DWORD),
+        ('dwExtraInfo', ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class _InputUnion(ctypes.Union):
+    """输入联合体（支持键盘和鼠标）"""
+    _fields_ = [
+        ('ki', _KeyboardInput),
+        ('mi', _MouseInput)
+    ]
+
+class _Input(ctypes.Structure):
+    """INPUT 结构"""
+    _anonymous_ = ('_input',)
+    _fields_ = [
+        ('type', wintypes.DWORD),
+        ('_input', _InputUnion)
+    ]
+
+class KeyboardHardwareSpoofer:
+    """键盘硬件信息伪装器 - 使用真实系统硬件标识符"""
+    
+    # Windows API 常量
+    KEYEVENTF_EXTENDEDKEY = 0x0001
+    KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_UNICODE = 0x0004
+    KEYEVENTF_SCANCODE = 0x0008
+    INPUT_KEYBOARD = 1
+    
+    # 真实键盘硬件标识符（从系统获取）
+    # Razer Huntsman V3 Pro Tenkeyless - HID\VID_1532&PID_02A7
+    REAL_VENDOR_ID = 0x1532   # Razer
+    REAL_PRODUCT_ID = 0x02A7  # Huntsman V3 Pro Tenkeyless
+    
+    def __init__(self):
+        """初始化硬件伪装器"""
+        self.user32 = ctypes.windll.user32
+        self.SendInput = self.user32.SendInput
+        self.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int]
+        self.SendInput.restype = wintypes.UINT
+        
+        # 使用真实键盘的 VID:PID
+        logger.info(f"[键盘伪装] 使用真实设备 Razer Huntsman V3 Pro (VID:0x{self.REAL_VENDOR_ID:04X}, PID:0x{self.REAL_PRODUCT_ID:04X})")
+    
+    def _generate_hardware_info(self):
+        """生成真实硬件信息（使用系统真实 VID:PID）"""
+        # 使用真实的 VID:PID 组合生成硬件信息
+        # dwExtraInfo 格式: [VID(16bit)][PID(16bit)]
+        # Windows HID 设备标识: VID_1532&PID_02A7
+        hardware_info = (self.REAL_VENDOR_ID << 16) | self.REAL_PRODUCT_ID
+        
+        return hardware_info
+    
+    def _get_scan_code(self, vk_code):
+        """获取虚拟键码对应的扫描码"""
+        # 使用 MapVirtualKey 获取真实扫描码
+        scan_code = self.user32.MapVirtualKeyW(vk_code, 0)  # MAPVK_VK_TO_VSC = 0
+        
+        # 为某些按键添加随机微调（模拟硬件差异）
+        if random.random() < 0.05:  # 5% 概率添加微调
+            scan_code = (scan_code & 0xFF) | random.choice([0, 0x0100])
+        
+        return scan_code
+    
+    def send_key_input(self, vk_code, is_down=True):
+        """发送伪装的键盘输入（使用真实 Razer Huntsman 标识符）"""
+        # 生成真实硬件信息
+        hardware_info = self._generate_hardware_info()
+        extra_info_value = wintypes.ULONG(hardware_info)
+        
+        # 获取扫描码
+        scan_code = self._get_scan_code(vk_code)
+        
+        # 设置按键标志
+        flags = 0
+        if not is_down:
+            flags |= self.KEYEVENTF_KEYUP
+        
+        # 对于扩展键（如方向键、Home、End 等）添加扩展标志
+        extended_keys = [0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,  # Page/Arrow keys
+                        0x2D, 0x2E, 0x2C,  # Insert, Delete, Print Screen
+                        0x5B, 0x5C, 0x5D]  # Windows keys, App key
+        if vk_code in extended_keys:
+            flags |= self.KEYEVENTF_EXTENDEDKEY
+        
+        # 构造输入结构
+        kb_input = _KeyboardInput(
+            wVk=vk_code,
+            wScan=scan_code,
+            dwFlags=flags,
+            time=0,  # 系统自动填充时间戳
+            dwExtraInfo=ctypes.pointer(extra_info_value)
+        )
+        
+        input_struct = _Input(
+            type=self.INPUT_KEYBOARD,
+            ki=kb_input
+        )
+        
+        # 发送输入
+        result = self.SendInput(1, ctypes.pointer(input_struct), ctypes.sizeof(input_struct))
+        
+        if result == 0:
+            logger.warning(f"[硬件伪装] SendInput 失败: VK={vk_code}, IsDown={is_down}")
+            return False
+        
+        return True
+
+# ============ 鼠标硬件伪装模块 ============
+class MouseHardwareSpoofer:
+    """鼠标硬件信息伪装器 - 使用真实系统硬件标识符"""
+    
+    # Windows API 常量
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP = 0x0040
+    MOUSEEVENTF_ABSOLUTE = 0x8000
+    MOUSEEVENTF_VIRTUALDESK = 0x4000
+    INPUT_MOUSE = 0
+    
+    # 真实鼠标硬件标识符（从系统获取）
+    # Logitech Mouse - HID\VID_046D&PID_C547
+    REAL_VENDOR_ID = 0x046D   # Logitech
+    REAL_PRODUCT_ID = 0xC547  # Logitech Mouse/Keyboard Combo
+    
+    def __init__(self):
+        """初始化鼠标硬件伪装器"""
+        self.user32 = ctypes.windll.user32
+        self.SendInput = self.user32.SendInput
+        self.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int]
+        self.SendInput.restype = wintypes.UINT
+        
+        # 获取屏幕尺寸（用于绝对坐标转换）
+        self.screen_width = self.user32.GetSystemMetrics(0)
+        self.screen_height = self.user32.GetSystemMetrics(1)
+        
+        # 记录上次鼠标位置（用于相对移动）
+        self.last_mouse_pos = None
+        
+        logger.info(f"[鼠标伪装] 使用真实设备 Logitech (VID:0x{self.REAL_VENDOR_ID:04X}, PID:0x{self.REAL_PRODUCT_ID:04X})")
+    
+    def _generate_hardware_info(self):
+        """生成真实硬件信息（使用系统真实 VID:PID）"""
+        # 使用真实的 VID:PID 组合生成硬件信息
+        # dwExtraInfo 格式: [VID(16bit)][PID(16bit)]
+        # Windows HID 设备标识: VID_046D&PID_C547
+        hardware_info = (self.REAL_VENDOR_ID << 16) | self.REAL_PRODUCT_ID
+        
+        return hardware_info
+    
+    def _add_micro_jitter(self, x, y):
+        """添加微抖动（模拟真实人手抖动）"""
+        # 5% 概率添加 1-2 像素的微抖动
+        if random.random() < 0.05:
+            jitter_x = random.randint(-2, 2)
+            jitter_y = random.randint(-2, 2)
+            return x + jitter_x, y + jitter_y
+        return x, y
+    
+    def move_mouse_absolute(self, x, y):
+        """移动鼠标到绝对屏幕坐标（使用真实 Logitech 标识符）"""
+        # 添加微抖动
+        x, y = self._add_micro_jitter(x, y)
+        
+        # 生成真实硬件信息
+        hardware_info = self._generate_hardware_info()
+        extra_info_value = wintypes.ULONG(hardware_info)
+        
+        # 将屏幕坐标转换为绝对坐标（0-65535）
+        abs_x = int((x * 65535) / self.screen_width)
+        abs_y = int((y * 65535) / self.screen_height)
+        
+        # 构造鼠标输入
+        mouse_input = _MouseInput(
+            dx=abs_x,
+            dy=abs_y,
+            mouseData=0,
+            dwFlags=self.MOUSEEVENTF_MOVE | self.MOUSEEVENTF_ABSOLUTE,
+            time=0,
+            dwExtraInfo=ctypes.pointer(extra_info_value)
+        )
+        
+        input_struct = _Input(
+            type=self.INPUT_MOUSE,
+            mi=mouse_input
+        )
+        
+        result = self.SendInput(1, ctypes.pointer(input_struct), ctypes.sizeof(input_struct))
+        
+        if result == 0:
+            logger.warning(f"[鼠标伪装] SendInput MOVE 失败: ({x}, {y})")
+            return False
+        
+        self.last_mouse_pos = (x, y)
+        return True
+    
+    def click_mouse(self, button='left', down_time=0.05):
+        """执行鼠标点击（带硬件伪装）"""
+        # 生成硬件信息
+        hardware_info = self._generate_hardware_info()
+        extra_info_value = wintypes.ULONG(hardware_info)
+        
+        # 确定按键标志
+        if button == 'left':
+            down_flag = self.MOUSEEVENTF_LEFTDOWN
+            up_flag = self.MOUSEEVENTF_LEFTUP
+        elif button == 'right':
+            down_flag = self.MOUSEEVENTF_RIGHTDOWN
+            up_flag = self.MOUSEEVENTF_RIGHTUP
+        elif button == 'middle':
+            down_flag = self.MOUSEEVENTF_MIDDLEDOWN
+            up_flag = self.MOUSEEVENTF_MIDDLEUP
+        else:
+            return False
+        
+        # 按下鼠标
+        mouse_down = _MouseInput(
+            dx=0, dy=0, mouseData=0,
+            dwFlags=down_flag,
+            time=0,
+            dwExtraInfo=ctypes.pointer(extra_info_value)
+        )
+        
+        input_down = _Input(type=self.INPUT_MOUSE, mi=mouse_down)
+        result = self.SendInput(1, ctypes.pointer(input_down), ctypes.sizeof(input_down))
+        
+        if result == 0:
+            logger.warning(f"[鼠标伪装] SendInput {button} DOWN 失败")
+            return False
+        
+        # 按住时间（模拟人手按压）
+        if down_time > 0:
+            time.sleep(down_time)
+        
+        # 释放鼠标（使用新的硬件信息）
+        hardware_info_up = self._generate_hardware_info()
+        extra_info_value_up = wintypes.ULONG(hardware_info_up)
+        
+        mouse_up = _MouseInput(
+            dx=0, dy=0, mouseData=0,
+            dwFlags=up_flag,
+            time=0,
+            dwExtraInfo=ctypes.pointer(extra_info_value_up)
+        )
+        
+        input_up = _Input(type=self.INPUT_MOUSE, mi=mouse_up)
+        result = self.SendInput(1, ctypes.pointer(input_up), ctypes.sizeof(input_up))
+        
+        if result == 0:
+            logger.warning(f"[鼠标伪装] SendInput {button} UP 失败")
+            return False
+        
+        return True
+    
+    def move_and_click(self, x, y, button='left', down_time=0.05):
+        """移动并点击（完整事件序列）"""
+        # 先移动到目标位置
+        if not self.move_mouse_absolute(x, y):
+            return False
+        
+        # 短暂延迟（模拟人手反应时间）
+        time.sleep(random.uniform(0.01, 0.03))
+        
+        # 执行点击
+        return self.click_mouse(button, down_time)
+
+# 全局硬件伪装器实例（延迟初始化）
+_keyboard_spoofer = None
+_mouse_spoofer = None
+
+def get_keyboard_spoofer():
+    """获取全局键盘硬件伪装器实例"""
+    global _keyboard_spoofer
+    if _keyboard_spoofer is None:
+        _keyboard_spoofer = KeyboardHardwareSpoofer()
+    return _keyboard_spoofer
+
+def get_mouse_spoofer():
+    """获取全局鼠标硬件伪装器实例"""
+    global _mouse_spoofer
+    if _mouse_spoofer is None:
+        _mouse_spoofer = MouseHardwareSpoofer()
+    return _mouse_spoofer
+
+# 兼容旧接口
+def get_hardware_spoofer():
+    """获取键盘硬件伪装器（兼容旧代码）"""
+    return get_keyboard_spoofer()
+# ============ 键盘和鼠标硬件伪装模块结束 ============
 
 class Ticker(Protocol):
     """
@@ -80,7 +395,7 @@ class BaseDNATask(BaseTask):
         self.next_monthly_card_start = 0
         self._logged_in = False
         self.enable_fidget_action = True
-        self.fidget_params = {"hold_lalt": False, "skip_jitter": False}
+        self.fidget_params = {"hold_lalt": False, "skip_jitter": False, "mouse_lock": False}
         self.sensitivity_config = self.get_global_config('Game Sensitivity Config')  # 游戏灵敏度配置
         self.onetime_seen = set()
         self.onetime_queue = deque()
@@ -340,18 +655,368 @@ class BaseDNATask(BaseTask):
         return (win_x <= mouse_x < win_x + hwnd_window.window_width) and \
             (win_y <= mouse_y < win_y + hwnd_window.window_height)
     
-    def set_mouse_in_window(self):
+    def set_mouse_in_window(self, use_trajectory=True):
         """
         设置鼠标在游戏窗口范围内。
+        
+        参数:
+            use_trajectory: 是否使用贝塞尔曲线轨迹移动
         """
         if self.is_mouse_in_window():
             return
         random_x = random.randint(self.width_of_screen(0.2), self.width_of_screen(0.8))
         random_y = random.randint(self.height_of_screen(0.2), self.height_of_screen(0.8))
-        abs_pos = self.executor.interaction.capture.get_abs_cords(random_x, random_y)
-        win32api.SetCursorPos(abs_pos)
+        
+        if use_trajectory:
+            # 前台和后台都使用贝塞尔曲线移动
+            self.move_mouse_with_trajectory(random_x, random_y)
+        else:
+            # 仅当明确禁用轨迹时直接移动
+            abs_pos = self.executor.interaction.capture.get_abs_cords(random_x, random_y)
+            win32api.SetCursorPos(abs_pos)
+
+    def _generate_bezier_curve(self, start_x, start_y, end_x, end_y, num_points=None):
+        """
+        生成带波动的贝塞尔曲线轨迹点，模拟真实人手移动
+        
+        参数:
+            start_x, start_y: 起始坐标
+            end_x, end_y: 目标坐标
+            num_points: 轨迹点数量，None则根据距离自动计算
+        
+        返回: [(x1,y1), (x2,y2), ...] 轨迹点列表
+        """
+        # 计算距离
+        distance = ((end_x - start_x)**2 + (end_y - start_y)**2)**0.5
+        
+        # 根据距离自动计算点数（每25像素约1个点，增加点数使曲线更平滑）
+        if num_points is None:
+            num_points = max(8, min(60, int(distance / 25)))
+        
+        # 计算移动方向的垂直向量（用于添加侧向波动）
+        dx = end_x - start_x
+        dy = end_y - start_y
+        if distance > 0:
+            # 归一化方向向量
+            norm_dx = dx / distance
+            norm_dy = dy / distance
+            # 垂直向量（逆时针旋转90度）
+            perp_x = -norm_dy
+            perp_y = norm_dx
+        else:
+            perp_x, perp_y = 0, 0
+        
+        # 生成多个控制点使用三次贝塞尔曲线（更自然的曲线）
+        # 控制点1：靠近起点
+        ctrl1_offset = random.uniform(0.2, 0.35)  # 在路径的20%-35%位置
+        ctrl1_x = start_x + dx * ctrl1_offset
+        ctrl1_y = start_y + dy * ctrl1_offset
+        
+        # 控制点2：靠近终点
+        ctrl2_offset = random.uniform(0.65, 0.8)  # 在路径的65%-80%位置
+        ctrl2_x = start_x + dx * ctrl2_offset
+        ctrl2_y = start_y + dy * ctrl2_offset
+        
+        # 为两个控制点添加随机偏移（垂直于移动方向）
+        offset_range = distance * random.uniform(0.1, 0.25)
+        
+        # 控制点1的偏移（可能向左或向右）
+        lateral_offset1 = random.uniform(-offset_range, offset_range)
+        ctrl1_x += perp_x * lateral_offset1
+        ctrl1_y += perp_y * lateral_offset1
+        
+        # 控制点2的偏移（倾向与控制点1相反方向，形成S型或C型曲线）
+        if random.random() > 0.5:
+            # 50%概率形成S型曲线
+            lateral_offset2 = -lateral_offset1 * random.uniform(0.3, 0.8)
+        else:
+            # 50%概率形成C型曲线
+            lateral_offset2 = lateral_offset1 * random.uniform(0.5, 1.0)
+        
+        ctrl2_x += perp_x * lateral_offset2
+        ctrl2_y += perp_y * lateral_offset2
+        
+        # 生成三次贝塞尔曲线的基础点
+        points = []
+        
+        # 随机生成波动参数
+        wave_frequency = random.uniform(1.5, 3.5)  # 波动频率
+        wave_amplitude = distance * random.uniform(0.005, 0.02)  # 波动幅度
+        
+        for i in range(num_points):
+            t = i / (num_points - 1)
+            
+            # 三次贝塞尔曲线公式
+            # B(t) = (1-t)³P₀ + 3(1-t)²tP₁ + 3(1-t)t²P₂ + t³P₃
+            t_inv = 1 - t
+            
+            # 基础贝塞尔曲线坐标
+            x = (t_inv**3 * start_x + 
+                 3 * t_inv**2 * t * ctrl1_x + 
+                 3 * t_inv * t**2 * ctrl2_x + 
+                 t**3 * end_x)
+            
+            y = (t_inv**3 * start_y + 
+                 3 * t_inv**2 * t * ctrl1_y + 
+                 3 * t_inv * t**2 * ctrl2_y + 
+                 t**3 * end_y)
+            
+            # 添加正弦波动模拟人手抖动（在移动中间部分波动更明显）
+            if 0.1 < t < 0.9:  # 起点和终点附近不添加太多波动
+                wave_t = t * wave_frequency * 3.14159  # 波动相位
+                wave_intensity = 4 * t * (1 - t)  # 中间部分波动最大
+                
+                # 垂直于移动方向的波动
+                wave_offset = np.sin(wave_t) * wave_amplitude * wave_intensity
+                x += perp_x * wave_offset
+                y += perp_y * wave_offset
+                
+                # 添加小的随机抖动
+                jitter = wave_amplitude * 0.5
+                x += random.uniform(-jitter, jitter)
+                y += random.uniform(-jitter, jitter)
+            
+            points.append((int(x), int(y)))
+        
+        # 去除重复的连续点（优化轨迹）
+        optimized_points = [points[0]]
+        for i in range(1, len(points)):
+            if points[i] != optimized_points[-1]:
+                optimized_points.append(points[i])
+        
+        return optimized_points
+
+    def move_mouse_with_trajectory(self, target_x, target_y, duration=None, save_original_pos=False):
+        """
+        沿贝塞尔曲线轨迹移动鼠标到目标位置
+        
+        参数:
+            target_x, target_y: 目标位置（游戏窗口相对坐标）
+            duration: 移动总时长（秒），None则根据距离自动计算
+            save_original_pos: 是否保存原始鼠标位置（用于后续复原）
+        
+        返回:
+            如果save_original_pos=True，返回原始鼠标位置(x, y)，否则返回None
+        """
+        # 锁定鼠标，暂停 fidget_action 的鼠标抖动
+        self.fidget_params["mouse_lock"] = True
+        
+        try:
+            # 获取当前鼠标位置
+            current_pos = win32api.GetCursorPos()
+            original_pos = current_pos if save_original_pos else None
+            
+            # 转换目标位置为绝对坐标
+            target_abs = self.executor.interaction.capture.get_abs_cords(int(target_x), int(target_y))
+            
+            # 计算距离
+            distance = ((target_abs[0] - current_pos[0])**2 + (target_abs[1] - current_pos[1])**2)**0.5
+            
+            # 如果距离太小，直接移动
+            if distance < 5:
+                win32api.SetCursorPos(target_abs)
+                return original_pos
+            
+            # 根据距离自动计算移动时长（每200像素约0.2秒）
+            if duration is None:
+                duration = max(0.1, min(0.5, distance / 1000))
+            
+            # 生成贝塞尔曲线轨迹
+            trajectory = self._generate_bezier_curve(
+                current_pos[0], current_pos[1],
+                target_abs[0], target_abs[1]
+            )
+            
+            # 沿轨迹移动，使用变速（加速-匀速-减速）模拟真实人手移动
+            points_count = len(trajectory)
+            
+            # 判断是否使用硬件伪装（前台模式）
+            use_hardware_spoof = self.hwnd.is_foreground()
+            if use_hardware_spoof:
+                try:
+                    mouse_spoofer = get_mouse_spoofer()
+                except Exception as e:
+                    logger.warning(f"[鼠标伪装] 初始化失败，使用 SetCursorPos: {e}")
+                    use_hardware_spoof = False
+            
+            for i, (x, y) in enumerate(trajectory):
+                # 使用硬件伪装或普通移动
+                if use_hardware_spoof:
+                    try:
+                        mouse_spoofer.move_mouse_absolute(int(x), int(y))
+                    except Exception as e:
+                        logger.warning(f"[鼠标伪装] SendInput 失败，回退到 SetCursorPos: {e}")
+                        win32api.SetCursorPos((int(x), int(y)))
+                        use_hardware_spoof = False
+                else:
+                    win32api.SetCursorPos((int(x), int(y)))
+                
+                # 计算当前进度（0到1）
+                progress = i / (points_count - 1) if points_count > 1 else 1
+                
+                # 使用缓动函数计算延迟（模拟加速减速）
+                # 开始慢速加速，中间快速，末尾减速
+                if progress < 0.2:
+                    # 起始阶段：较慢（加速）
+                    delay_factor = 2.5 - progress * 5
+                elif progress > 0.85:
+                    # 结束阶段：减速至较慢
+                    delay_factor = 1.0 + (progress - 0.85) * 8
+                else:
+                    # 中间阶段：快速移动
+                    delay_factor = 0.3 + random.uniform(-0.1, 0.1)
+                
+                # 基础延迟时间
+                base_interval = duration / points_count
+                actual_interval = base_interval * delay_factor
+                
+                # 添加微小随机延迟模拟人手不稳定
+                jitter = actual_interval * random.uniform(-0.15, 0.15)
+                final_interval = max(0.001, actual_interval + jitter)
+                
+                if i < points_count - 1:  # 最后一个点不需要延迟
+                    time.sleep(final_interval)
+            
+            return original_pos
+        finally:
+            # 无论如何都要解锁鼠标，允许 fidget_action 重新抖动
+            self.fidget_params["mouse_lock"] = False
     
-    def _perform_random_click(self, x_abs, y_abs, use_safe_move=False, safe_move_box: Union[list[Box], Box, None]=None, down_time=0.0, post_sleep=0.0, after_sleep=0.0):
+    def restore_mouse_position(self, original_pos, use_trajectory=True):
+        """
+        复原鼠标到原始位置
+        
+        参数:
+            original_pos: 原始鼠标位置(x, y)，如果为None则不执行任何操作
+            use_trajectory: 是否使用贝塞尔曲线轨迹移动回去
+        """
+        if original_pos is None:
+            return
+        
+        current_pos = win32api.GetCursorPos()
+        
+        # 计算距离，如果太近就不需要复原
+        distance = ((original_pos[0] - current_pos[0])**2 + (original_pos[1] - current_pos[1])**2)**0.5
+        if distance < 5:
+            return
+        
+        if use_trajectory:
+            # 使用贝塞尔曲线轨迹移动回去
+            duration = max(0.1, min(0.5, distance / 1000))
+            trajectory = self._generate_bezier_curve(
+                current_pos[0], current_pos[1],
+                original_pos[0], original_pos[1]
+            )
+            
+            points_count = len(trajectory)
+            
+            # 判断是否使用硬件伪装
+            use_hardware_spoof = self.hwnd.is_foreground()
+            if use_hardware_spoof:
+                try:
+                    mouse_spoofer = get_mouse_spoofer()
+                except Exception:
+                    use_hardware_spoof = False
+            
+            for i, (x, y) in enumerate(trajectory):
+                # 使用硬件伪装或普通移动
+                if use_hardware_spoof:
+                    try:
+                        mouse_spoofer.move_mouse_absolute(int(x), int(y))
+                    except Exception:
+                        win32api.SetCursorPos((int(x), int(y)))
+                        use_hardware_spoof = False
+                else:
+                    win32api.SetCursorPos((int(x), int(y)))
+                
+                # 使用变速逻辑
+                progress = i / (points_count - 1) if points_count > 1 else 1
+                
+                if progress < 0.2:
+                    delay_factor = 2.5 - progress * 5
+                elif progress > 0.85:
+                    delay_factor = 1.0 + (progress - 0.85) * 8
+                else:
+                    delay_factor = 0.3 + random.uniform(-0.1, 0.1)
+                
+                base_interval = duration / points_count
+                actual_interval = base_interval * delay_factor
+                jitter = actual_interval * random.uniform(-0.15, 0.15)
+                final_interval = max(0.001, actual_interval + jitter)
+                
+                if i < points_count - 1:
+                    time.sleep(final_interval)
+        else:
+            # 直接移动回去
+            win32api.SetCursorPos(original_pos)
+    
+    def move_mouse_abs_with_trajectory(self, target_abs_x, target_abs_y, duration=None):
+        """
+        使用贝塞尔曲线轨迹移动鼠标到绝对坐标位置（屏幕坐标）
+        
+        参数:
+            target_abs_x, target_abs_y: 目标位置（屏幕绝对坐标）
+            duration: 移动总时长（秒），None则根据距离自动计算
+        """
+        # 获取当前鼠标位置
+        current_pos = win32api.GetCursorPos()
+        
+        # 计算距离
+        distance = ((target_abs_x - current_pos[0])**2 + (target_abs_y - current_pos[1])**2)**0.5
+        
+        # 如果距离太小，直接移动
+        if distance < 5:
+            win32api.SetCursorPos((target_abs_x, target_abs_y))
+            return
+        
+        # 根据距离自动计算移动时长
+        if duration is None:
+            duration = max(0.1, min(0.5, distance / 1000))
+        
+        # 生成贝塞尔曲线轨迹
+        trajectory = self._generate_bezier_curve(
+            current_pos[0], current_pos[1],
+            target_abs_x, target_abs_y
+        )
+        
+        # 沿轨迹移动，使用变速模拟真实人手移动
+        points_count = len(trajectory)
+        
+        for i, (x, y) in enumerate(trajectory):
+            win32api.SetCursorPos((int(x), int(y)))
+            
+            # 使用缓动函数计算延迟（加速-匀速-减速）
+            progress = i / (points_count - 1) if points_count > 1 else 1
+            
+            if progress < 0.2:
+                delay_factor = 2.5 - progress * 5
+            elif progress > 0.85:
+                delay_factor = 1.0 + (progress - 0.85) * 8
+            else:
+                delay_factor = 0.3 + random.uniform(-0.1, 0.1)
+            
+            base_interval = duration / points_count
+            actual_interval = base_interval * delay_factor
+            jitter = actual_interval * random.uniform(-0.15, 0.15)
+            final_interval = max(0.001, actual_interval + jitter)
+            
+            if i < points_count - 1:
+                time.sleep(final_interval)
+    
+    def _perform_random_click(self, x_abs, y_abs, use_safe_move=False, safe_move_box: Union[list[Box], Box, None]=None, down_time=0.0, post_sleep=0.0, after_sleep=0.0, use_trajectory=True, restore_position=False):
+        """
+        执行带随机延迟和轨迹移动的点击操作
+        
+        参数:
+            x_abs, y_abs: 目标点击位置（游戏窗口相对坐标）
+            use_safe_move: 后台点击时是否使用安全移动（已弃用，后台也会移动鼠标）
+            safe_move_box: 安全移动区域（已弃用）
+            down_time: 鼠标按下时长
+            post_sleep: 点击前延迟
+            after_sleep: 点击后延迟
+            use_trajectory: 是否使用贝塞尔曲线轨迹移动（前台和后台都支持）
+            restore_position: 是否在点击后复原鼠标位置
+        """
         x = int(x_abs)
         y = int(y_abs)
 
@@ -359,21 +1024,62 @@ class BaseDNATask(BaseTask):
         _down_time = random.uniform(0.06, 0.13) if down_time <= 0 else max(0.05, down_time + random.uniform(0.0, 0.13))
         _after_sleep = random.uniform(0.01, 0.04) if after_sleep <= 0 else after_sleep + random.uniform(0.02, 0.08)
         
+        # 锁定鼠标，暂停 fidget_action 的鼠标抖动
+        self.fidget_params["mouse_lock"] = True
+        
         self.sleep(_post_sleep)
 
+        original_pos = None
+        
         if not self.hwnd.is_foreground():
-            if use_safe_move:
-                _down_time = 0.01 if down_time == 0.0 else down_time
-                self.move_mouse_to_safe_position(boxes=safe_move_box)
+            # 后台模式：也支持轨迹移动，使行为更真实
+            if use_trajectory:
+                original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
+                self.sleep(random.uniform(0.05, 0.08))
+            else:
+                if restore_position:
+                    original_pos = win32api.GetCursorPos()
+                # 直接移动到目标位置
+                abs_pos = self.executor.interaction.capture.get_abs_cords(x, y)
+                win32api.SetCursorPos(abs_pos)
+                self.sleep(random.uniform(0.08, 0.12))
+            
+            # 使用PostMessage点击
             self.click(x, y, down_time=_down_time)
-            if use_safe_move:
-                self.move_back_from_safe_position()
         else:
-            self.pydirect_interaction.move(x, y)
-            self.sleep(random.uniform(0.08, 0.12))
-            self.pydirect_interaction.click(down_time=_down_time)
-
+            # 前台模式：使用硬件伪装点击
+            if use_trajectory:
+                original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
+                self.sleep(random.uniform(0.05, 0.08))
+            else:
+                if restore_position:
+                    original_pos = win32api.GetCursorPos()
+                self.pydirect_interaction.move(x, y)
+                self.sleep(random.uniform(0.08, 0.12))
+            
+            # 尝试使用鼠标硬件伪装点击
+            try:
+                mouse_spoofer = get_mouse_spoofer()
+                # 添加随机抖动到按下时长
+                actual_down_time = _down_time + random.uniform(-0.01, 0.02)
+                actual_down_time = max(0.03, actual_down_time)
+                
+                success = mouse_spoofer.click_mouse('left', actual_down_time)
+                if not success:
+                    # 硬件伪装失败，回退到 PyDirectInteraction
+                    self.pydirect_interaction.click(down_time=_down_time)
+            except Exception as e:
+                logger.warning(f"[鼠标伪装] 点击失败，使用备用方法: {e}")
+                self.pydirect_interaction.click(down_time=_down_time)
+        
         self.sleep(_after_sleep)
+        
+        # 如果需要，复原鼠标位置
+        if restore_position and original_pos is not None:
+            self.restore_mouse_position(original_pos, use_trajectory=use_trajectory)
+        
+        # 释放鼠标锁，恢复 fidget_action 的鼠标抖动
+        self.fidget_params["mouse_lock"] = False
 
     def click_btn_random(self, box: Box, safe_move_box: Box = None, down_time=0.0, post_sleep=0.0, after_sleep=0.0):
         _safe_move_box = box.copy(x_offset=-box.width*0.20, width_offset=box.width * 8.1,
@@ -468,13 +1174,15 @@ class BaseDNATask(BaseTask):
         (x1, y1), (x2, y2) = [hwnd_window.get_abs_cords(x, y) for x, y in coords]
         return x1 <= mouse_x < x2 and y1 <= mouse_y < y2
 
-    def rel_move_if_in_win(self, x=0.5, y=0.5, boxes: Union[list[Box], Box, None] = None):
+    def rel_move_if_in_win(self, x=0.5, y=0.5, boxes: Union[list[Box], Box, None] = None, use_trajectory=True):
         """
         如果鼠标在窗口内，则将其移动到游戏窗口内的相对位置。
 
         Args:
             x (float): 相对 x 坐标 (0.0 到 1.0)。
             y (float): 相对 y 坐标 (0.0 到 1.0)。
+            boxes: 边界框限制，如果鼠标不在指定框内则不移动
+            use_trajectory: 是否使用贝塞尔曲线轨迹移动
         """
         if not self.is_mouse_in_window():
             return False
@@ -487,9 +1195,17 @@ class BaseDNATask(BaseTask):
                     break
             else:
                 return False
-        abs_pos = self.executor.device_manager.hwnd_window.get_abs_cords(self.width_of_screen(x),
-                                                                         self.height_of_screen(y))
-        win32api.SetCursorPos(abs_pos)
+        
+        target_x = self.width_of_screen(x)
+        target_y = self.height_of_screen(y)
+        
+        if use_trajectory:
+            # 前台和后台都使用贝塞尔曲线移动
+            self.move_mouse_with_trajectory(target_x, target_y)
+        else:
+            # 仅当明确禁用轨迹时直接移动
+            abs_pos = self.executor.device_manager.hwnd_window.get_abs_cords(target_x, target_y)
+            win32api.SetCursorPos(abs_pos)
         return True
 
     def create_ticker(self, action: Callable, interval: Union[float, int, Callable] = 1.0, interval_random_range: tuple = (1.0, 1.0)) -> Ticker:
@@ -648,8 +1364,21 @@ class BaseDNATask(BaseTask):
         needs_resync = False
 
         def send_key_raw(key, is_down):
+            """发送键盘信号（优先使用硬件伪装）"""
             interaction = self.executor.interaction
             vk_code = interaction.get_key_by_str(key)
+            
+            # 优先使用硬件伪装的 SendInput（前台窗口时）
+            if self.hwnd.is_foreground():
+                try:
+                    spoofer = get_hardware_spoofer()
+                    success = spoofer.send_key_input(vk_code, is_down)
+                    if success:
+                        return
+                except Exception as e:
+                    logger.warning(f"[硬件伪装] 失败，回退到 PostMessage: {e}")
+            
+            # 回退到 PostMessage（后台或硬件伪装失败时）
             event = win32con.WM_KEYDOWN if is_down else win32con.WM_KEYUP
             lparam = interaction.make_lparam(vk_code)
             interaction.post(event, vk_code, lparam)
@@ -704,6 +1433,10 @@ class BaseDNATask(BaseTask):
 
         def perform_mouse_jitter(current_drift):
             """执行鼠标微小抖动，返回更新后的漂移量"""
+            # 检查鼠标锁：如果主线程正在执行点击操作，则跳过抖动
+            if self.fidget_params.get("mouse_lock", False):
+                return current_drift
+            
             if not self.afk_config.get("鼠标抖动", True) or self.fidget_params.get("skip_jitter", False):
                 return current_drift
 

@@ -17,6 +17,11 @@ class AutoMazeTask(BaseDNATask, TriggerTask):
         self.description = "自动识别并进行迷宫解锁"
         self.default_config.update({
             "移动延迟（秒）": 0.1,
+            "使用轨迹移动": True,
+        })
+        self.config_description.update({
+            "移动延迟（秒）": "拖拽路径时每个点之间的延迟时间",
+            "使用轨迹移动": "是否使用贝塞尔曲线轨迹移动鼠标（更自然，更难被检测）",
         })
         self._unlocked = False
         self._last_no_puzzle_log = 0
@@ -90,18 +95,24 @@ class AutoMazeTask(BaseDNATask, TriggerTask):
 
         # 获取配置的移动延迟
         move_delay = self.config.get("移动延迟（秒）", 0.1)
+        use_trajectory = self.config.get("使用轨迹移动", True)
 
         # 路径是基于 1920x1080 的，需要缩放到当前分辨率
         scale_x = hwnd_window.width / 1920
         scale_y = hwnd_window.height / 1080
 
-        # 第一个点：按下鼠标
+        # 第一个点：移动到起点并按下鼠标
         x = int(path[0][0] * scale_x)
         y = int(path[0][1] * scale_y)
         abs_x, abs_y = hwnd_window.get_abs_cords(x, y)
         logger.debug(f"按下并移动到: ({abs_x}, {abs_y})")
 
-        win32api.SetCursorPos((abs_x, abs_y))
+        # 使用贝塞尔曲线移动到起点
+        if use_trajectory:
+            self.move_mouse_abs_with_trajectory(abs_x, abs_y)
+        else:
+            win32api.SetCursorPos((abs_x, abs_y))
+        
         self.sleep_random(0.1, random_range=(1, 1.2))
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         self.sleep_random(move_delay, random_range=(1, 1.2))
@@ -113,7 +124,12 @@ class AutoMazeTask(BaseDNATask, TriggerTask):
             abs_x, abs_y = hwnd_window.get_abs_cords(x, y)
             logger.debug(f"拖拽到: ({abs_x}, {abs_y})")
 
-            win32api.SetCursorPos((abs_x, abs_y))
+            # 拖拽时也使用贝塞尔曲线移动
+            if use_trajectory:
+                self.move_mouse_abs_with_trajectory(abs_x, abs_y, duration=move_delay * 0.8)
+            else:
+                win32api.SetCursorPos((abs_x, abs_y))
+            
             self.sleep_random(move_delay, random_range=(1, 1.2))
 
         # 最后：释放鼠标左键
