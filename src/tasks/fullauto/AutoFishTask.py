@@ -447,8 +447,8 @@ class AutoFishTask(DNAOneTimeTask, BaseDNATask):
         logger.info(f"等待 {cfg.get('END_WAIT_SPACE', 7.0)}s 结束鱼信息展示...")
         self.sleep(cfg.get("END_WAIT_SPACE", 7.0))
 
-        logger.info("收线 (Space)")
-        self.send_key("space", down_time=0.06)
+        logger.info("点击屏幕以结束鱼信息展示")
+        self.click_relative_random(0.3, 0.3, 0.7, 0.7)
 
         # wait and verify
         confirm_deadline = time.monotonic() + cfg.get("MAX_END_SEC", 20.0)
@@ -464,7 +464,7 @@ class AutoFishTask(DNAOneTimeTask, BaseDNATask):
                 else:
                     logger.info("确认已回到挥杆界面")
                 return True
-            self.send_key("space", down_time=0.06)
+            self.click_relative_random(0.3, 0.3, 0.7, 0.7)
             self.sleep(1.0)
         logger.info("结束阶段确认失败")
         return False
