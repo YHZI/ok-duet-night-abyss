@@ -9,6 +9,7 @@ import random
 from collections import deque
 import ctypes
 from ctypes import wintypes
+import threading
 
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -26,9 +27,9 @@ f_black_color = {
 }
 
 # ============ 键盘和鼠标输入硬件伪装模块 ============
-# 先定义 ctypes 结构体
-class _KeyboardInput(ctypes.Structure):
-    """键盘输入结构"""
+# 先定义 ctypes 结构体（使用Spoofer前缀避免与ok库冲突）
+class _SpooferKeyboardInput(ctypes.Structure):
+    """键盘输入结构（伪装版）"""
     _fields_ = [
         ('wVk', wintypes.WORD),
         ('wScan', wintypes.WORD),
@@ -37,8 +38,8 @@ class _KeyboardInput(ctypes.Structure):
         ('dwExtraInfo', ctypes.POINTER(wintypes.ULONG))
     ]
 
-class _MouseInput(ctypes.Structure):
-    """鼠标输入结构"""
+class _SpooferMouseInput(ctypes.Structure):
+    """鼠标输入结构（伪装版）"""
     _fields_ = [
         ('dx', wintypes.LONG),
         ('dy', wintypes.LONG),
@@ -48,19 +49,19 @@ class _MouseInput(ctypes.Structure):
         ('dwExtraInfo', ctypes.POINTER(wintypes.ULONG))
     ]
 
-class _InputUnion(ctypes.Union):
-    """输入联合体（支持键盘和鼠标）"""
+class _SpooferInputUnion(ctypes.Union):
+    """输入联合体（支持键盘和鼠标）（伪装版）"""
     _fields_ = [
-        ('ki', _KeyboardInput),
-        ('mi', _MouseInput)
+        ('ki', _SpooferKeyboardInput),
+        ('mi', _SpooferMouseInput)
     ]
 
-class _Input(ctypes.Structure):
-    """INPUT 结构"""
+class _SpooferInput(ctypes.Structure):
+    """INPUT 结构（伪装版）"""
     _anonymous_ = ('_input',)
     _fields_ = [
         ('type', wintypes.DWORD),
-        ('_input', _InputUnion)
+        ('_input', _SpooferInputUnion)
     ]
 
 class KeyboardHardwareSpoofer:
@@ -82,7 +83,7 @@ class KeyboardHardwareSpoofer:
         """初始化硬件伪装器"""
         self.user32 = ctypes.windll.user32
         self.SendInput = self.user32.SendInput
-        self.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int]
+        self.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_SpooferInput), ctypes.c_int]
         self.SendInput.restype = wintypes.UINT
         
         # 使用真实键盘的 VID:PID
@@ -130,7 +131,7 @@ class KeyboardHardwareSpoofer:
             flags |= self.KEYEVENTF_EXTENDEDKEY
         
         # 构造输入结构
-        kb_input = _KeyboardInput(
+        kb_input = _SpooferKeyboardInput(
             wVk=vk_code,
             wScan=scan_code,
             dwFlags=flags,
@@ -138,7 +139,7 @@ class KeyboardHardwareSpoofer:
             dwExtraInfo=ctypes.pointer(extra_info_value)
         )
         
-        input_struct = _Input(
+        input_struct = _SpooferInput(
             type=self.INPUT_KEYBOARD,
             ki=kb_input
         )
@@ -177,7 +178,7 @@ class MouseHardwareSpoofer:
         """初始化鼠标硬件伪装器"""
         self.user32 = ctypes.windll.user32
         self.SendInput = self.user32.SendInput
-        self.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int]
+        self.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_SpooferInput), ctypes.c_int]
         self.SendInput.restype = wintypes.UINT
         
         # 获取屏幕尺寸（用于绝对坐标转换）
@@ -221,7 +222,7 @@ class MouseHardwareSpoofer:
         abs_y = int((y * 65535) / self.screen_height)
         
         # 构造鼠标输入
-        mouse_input = _MouseInput(
+        mouse_input = _SpooferMouseInput(
             dx=abs_x,
             dy=abs_y,
             mouseData=0,
@@ -230,7 +231,7 @@ class MouseHardwareSpoofer:
             dwExtraInfo=ctypes.pointer(extra_info_value)
         )
         
-        input_struct = _Input(
+        input_struct = _SpooferInput(
             type=self.INPUT_MOUSE,
             mi=mouse_input
         )
@@ -264,14 +265,14 @@ class MouseHardwareSpoofer:
             return False
         
         # 按下鼠标
-        mouse_down = _MouseInput(
+        mouse_down = _SpooferMouseInput(
             dx=0, dy=0, mouseData=0,
             dwFlags=down_flag,
             time=0,
             dwExtraInfo=ctypes.pointer(extra_info_value)
         )
         
-        input_down = _Input(type=self.INPUT_MOUSE, mi=mouse_down)
+        input_down = _SpooferInput(type=self.INPUT_MOUSE, mi=mouse_down)
         result = self.SendInput(1, ctypes.pointer(input_down), ctypes.sizeof(input_down))
         
         if result == 0:
@@ -286,14 +287,14 @@ class MouseHardwareSpoofer:
         hardware_info_up = self._generate_hardware_info()
         extra_info_value_up = wintypes.ULONG(hardware_info_up)
         
-        mouse_up = _MouseInput(
+        mouse_up = _SpooferMouseInput(
             dx=0, dy=0, mouseData=0,
             dwFlags=up_flag,
             time=0,
             dwExtraInfo=ctypes.pointer(extra_info_value_up)
         )
         
-        input_up = _Input(type=self.INPUT_MOUSE, mi=mouse_up)
+        input_up = _SpooferInput(type=self.INPUT_MOUSE, mi=mouse_up)
         result = self.SendInput(1, ctypes.pointer(input_up), ctypes.sizeof(input_up))
         
         if result == 0:
@@ -399,6 +400,12 @@ class BaseDNATask(BaseTask):
         self.sensitivity_config = self.get_global_config('Game Sensitivity Config')  # 游戏灵敏度配置
         self.onetime_seen = set()
         self.onetime_queue = deque()
+        self.mouse_movement_lock = threading.RLock()  # 保护鼠标移动操作的线程锁
+        
+        # Debug追踪系统（用于复位模式调试）
+        self.debug_trace_enabled = False
+        self.debug_trace_log = []
+        self.debug_trace_lock = threading.Lock()
 
     @property
     def f_search_box(self) -> Box:
@@ -446,6 +453,63 @@ class BaseDNATask(BaseTask):
         """
         # 确保引用的是正确的类
         return PyDirectInteraction(self.executor.interaction.capture, self.hwnd)
+    
+    # ============ Debug追踪系统 ============
+    def start_debug_trace(self, context="unknown"):
+        """启动debug追踪（用于复位模式等关键操作）"""
+        with self.debug_trace_lock:
+            self.debug_trace_enabled = True
+            self.debug_trace_log = []
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            self.debug_trace_log.append(f"[{timestamp}] ========== DEBUG追踪开始: {context} ==========")
+            logger.info(f"[DEBUG追踪] 已启动追踪: {context}")
+    
+    def stop_debug_trace(self):
+        """停止debug追踪并输出日志"""
+        with self.debug_trace_lock:
+            if not self.debug_trace_enabled:
+                return
+            
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            self.debug_trace_log.append(f"[{timestamp}] ========== DEBUG追踪结束 ==========")
+            self.debug_trace_enabled = False
+            
+            # 输出完整追踪日志
+            logger.info("[DEBUG追踪] 完整调用记录:")
+            for log_line in self.debug_trace_log:
+                logger.info(log_line)
+            
+            # 清空日志
+            self.debug_trace_log = []
+    
+    def trace_call(self, func_name, **kwargs):
+        """记录函数调用（仅在debug追踪启用时）"""
+        if not self.debug_trace_enabled:
+            return
+        
+        with self.debug_trace_lock:
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            params = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
+            log_line = f"[{timestamp}] 调用: {func_name}({params})"
+            self.debug_trace_log.append(log_line)
+            # 立即输出到日志，不等到最后
+            logger.info(f"[DEBUG追踪] {log_line}")
+    
+    def trace_result(self, func_name, result=None, **kwargs):
+        """记录函数返回结果（仅在debug追踪启用时）"""
+        if not self.debug_trace_enabled:
+            return
+        
+        with self.debug_trace_lock:
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            info = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
+            if result is not None:
+                log_line = f"[{timestamp}] 返回: {func_name} -> {result} | {info}"
+            else:
+                log_line = f"[{timestamp}] 完成: {func_name} | {info}"
+            self.debug_trace_log.append(log_line)
+            # 立即输出到日志，不等到最后
+            logger.info(f"[DEBUG追踪] {log_line}")
     
     def enable(self):
         self.onetime_seen = set()
@@ -538,6 +602,58 @@ class BaseDNATask(BaseTask):
             return getattr(self, key)
         return default
 
+    # ============================================================================
+    # 鼠标移动底层 API - 所有鼠标移动的唯一入口
+    # ============================================================================
+    
+    def _atomic_set_cursor_pos(self, pos: tuple[int, int]) -> bool:
+        """
+        原子级鼠标移动 - 系统唯一允许调用 SetCursorPos 的方法。
+        
+        所有鼠标移动必须通过此方法，在锁内检查窗口状态并执行移动。
+        禁止在其他地方直接调用 win32api.SetCursorPos。
+        
+        Args:
+            pos: 目标位置 (x, y)
+            
+        Returns:
+            bool: 成功返回 True，窗口在后台返回 False
+        """
+        self.trace_call("_atomic_set_cursor_pos", pos=pos)
+        with self.mouse_movement_lock:
+            if not self.hwnd.is_foreground():
+                self.trace_result("_atomic_set_cursor_pos", result=False, reason="窗口在后台")
+                return False
+            win32api.SetCursorPos(pos)
+            self.trace_result("_atomic_set_cursor_pos", result=True)
+            return True
+
+    def _atomic_move_relative(self, dx: int, dy: int) -> bool:
+        """
+        原子级相对移动 - 系统唯一允许调用相对移动的方法。
+        
+        所有相对移动必须通过此方法，在锁内检查窗口状态并执行移动。
+        
+        Args:
+            dx: X轴移动量
+            dy: Y轴移动量
+            
+        Returns:
+            bool: 成功返回 True，窗口在后台返回 False
+        """
+        self.trace_call("_atomic_move_relative", dx=dx, dy=dy)
+        with self.mouse_movement_lock:
+            if not self.hwnd.is_foreground():
+                self.trace_result("_atomic_move_relative", result=False, reason="窗口在后台")
+                return False
+            self.genshin_interaction.do_move_mouse_relative(dx, dy)
+            self.trace_result("_atomic_move_relative", result=True)
+            return True
+
+    # ============================================================================
+    # 高层鼠标移动方法 - 只负责业务逻辑
+    # ============================================================================
+
     def soundBeep(self, _n=None):
         if not self.afk_config.get("提示音", True):
             return
@@ -553,9 +669,8 @@ class BaseDNATask(BaseTask):
         self.log_info(msg, notify=self.afk_config['弹出通知'])
 
     def move_mouse_to_safe_position(self, save_current_pos: bool = True, boxes: Union[list[Box], Box, None] = None):
-        # 后台模式下不移动鼠标
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
         if not self.hwnd.is_foreground():
-            logger.debug(f"[move_mouse_to_safe_position] 窗口在后台，跳过移动")
             return
         
         logger.debug(f"[move_mouse_to_safe_position] 移动鼠标到安全位置, save_pos={save_current_pos}")
@@ -568,15 +683,14 @@ class BaseDNATask(BaseTask):
                 self.old_mouse_pos = None
 
     def move_back_from_safe_position(self):
-        # 后台模式下不移动鼠标
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
         if not self.hwnd.is_foreground():
-            logger.debug(f"[move_back_from_safe_position] 窗口在后台，跳过移动")
             return
         
         logger.debug(f"[move_back_from_safe_position] 从安全位置移回")
         
         if self.afk_config["防止鼠标干扰"] and self.old_mouse_pos is not None:
-            win32api.SetCursorPos(self.old_mouse_pos)
+            self._atomic_set_cursor_pos(self.old_mouse_pos)
             self.old_mouse_pos = None
 
     # def sleep(self, timeout):
@@ -676,12 +790,11 @@ class BaseDNATask(BaseTask):
         参数:
             use_trajectory: 是否使用贝塞尔曲线轨迹移动
         """
-        if self.is_mouse_in_window():
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
+        if not self.hwnd.is_foreground():
             return
         
-        # 后台模式下不移动鼠标
-        if not self.hwnd.is_foreground():
-            logger.debug(f"[set_mouse_in_window] 窗口在后台，跳过移动")
+        if self.is_mouse_in_window():
             return
         
         logger.debug(f"[set_mouse_in_window] 鼠标不在窗口内，移动鼠标到窗口内")
@@ -690,12 +803,10 @@ class BaseDNATask(BaseTask):
         random_y = random.randint(self.height_of_screen(0.2), self.height_of_screen(0.8))
         
         if use_trajectory:
-            # 使用贝塞尔曲线移动
             self.move_mouse_with_trajectory(random_x, random_y)
         else:
-            # 仅当明确禁用轨迹时直接移动
             abs_pos = self.executor.interaction.capture.get_abs_cords(random_x, random_y)
-            win32api.SetCursorPos(abs_pos)
+            self._atomic_set_cursor_pos(abs_pos)
 
     def _generate_bezier_curve(self, start_x, start_y, end_x, end_y, num_points=None):
         """
@@ -828,9 +939,8 @@ class BaseDNATask(BaseTask):
         返回:
             如果save_original_pos=True，返回原始鼠标位置(x, y)，否则返回None
         """
-        # 后台模式下不移动鼠标
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
         if not self.hwnd.is_foreground():
-            logger.debug(f"[move_mouse_with_trajectory] 窗口在后台，跳过鼠标移动")
             if save_original_pos:
                 return win32api.GetCursorPos()
             return None
@@ -851,9 +961,9 @@ class BaseDNATask(BaseTask):
             # 计算距离
             distance = ((target_abs[0] - current_pos[0])**2 + (target_abs[1] - current_pos[1])**2)**0.5
             
-            # 如果距离太小，直接移动
+            # 距离太小，直接移动
             if distance < 5:
-                win32api.SetCursorPos(target_abs)
+                self._atomic_set_cursor_pos(target_abs)
                 return original_pos
             
             # 根据距离自动计算移动时长（每200像素约0.2秒）
@@ -869,26 +979,10 @@ class BaseDNATask(BaseTask):
             # 沿轨迹移动，使用变速（加速-匀速-减速）模拟真实人手移动
             points_count = len(trajectory)
             
-            # 判断是否使用硬件伪装（前台模式）
-            use_hardware_spoof = self.hwnd.is_foreground()
-            if use_hardware_spoof:
-                try:
-                    mouse_spoofer = get_mouse_spoofer()
-                except Exception as e:
-                    logger.warning(f"[鼠标伪装] 初始化失败，使用 SetCursorPos: {e}")
-                    use_hardware_spoof = False
-            
             for i, (x, y) in enumerate(trajectory):
-                # 使用硬件伪装或普通移动
-                if use_hardware_spoof:
-                    try:
-                        mouse_spoofer.move_mouse_absolute(int(x), int(y))
-                    except Exception as e:
-                        logger.warning(f"[鼠标伪装] SendInput 失败，回退到 SetCursorPos: {e}")
-                        win32api.SetCursorPos((int(x), int(y)))
-                        use_hardware_spoof = False
-                else:
-                    win32api.SetCursorPos((int(x), int(y)))
+                # 原子移动 - 如果窗口切换到后台会自动中断
+                if not self._atomic_set_cursor_pos((int(x), int(y))):
+                    break
                 
                 # 计算当前进度（0到1）
                 progress = i / (points_count - 1) if points_count > 1 else 1
@@ -916,14 +1010,8 @@ class BaseDNATask(BaseTask):
                 if i < points_count - 1:  # 最后一个点不需要延迟
                     time.sleep(final_interval)
             
-            # 确保最终精确到达目标位置（防止轨迹偏差）
-            if use_hardware_spoof:
-                try:
-                    mouse_spoofer.move_mouse_absolute(int(target_abs[0]), int(target_abs[1]))
-                except Exception:
-                    win32api.SetCursorPos(target_abs)
-            else:
-                win32api.SetCursorPos(target_abs)
+            # 确保最终到达目标位置
+            self._atomic_set_cursor_pos(target_abs)
             
             return original_pos
         finally:
@@ -941,9 +1029,8 @@ class BaseDNATask(BaseTask):
         if original_pos is None:
             return
         
-        # 后台模式下不移动鼠标
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
         if not self.hwnd.is_foreground():
-            logger.debug(f"[restore_mouse_position] 窗口在后台，跳过鼠标复原")
             return
         
         logger.debug(f"[restore_mouse_position] 复原鼠标到: {original_pos}")
@@ -965,24 +1052,10 @@ class BaseDNATask(BaseTask):
             
             points_count = len(trajectory)
             
-            # 判断是否使用硬件伪装
-            use_hardware_spoof = self.hwnd.is_foreground()
-            if use_hardware_spoof:
-                try:
-                    mouse_spoofer = get_mouse_spoofer()
-                except Exception:
-                    use_hardware_spoof = False
-            
             for i, (x, y) in enumerate(trajectory):
-                # 使用硬件伪装或普通移动
-                if use_hardware_spoof:
-                    try:
-                        mouse_spoofer.move_mouse_absolute(int(x), int(y))
-                    except Exception:
-                        win32api.SetCursorPos((int(x), int(y)))
-                        use_hardware_spoof = False
-                else:
-                    win32api.SetCursorPos((int(x), int(y)))
+                # 原子移动 - 窗口切换到后台会自动中断
+                if not self._atomic_set_cursor_pos((int(x), int(y))):
+                    break
                 
                 # 使用变速逻辑
                 progress = i / (points_count - 1) if points_count > 1 else 1
@@ -1003,7 +1076,7 @@ class BaseDNATask(BaseTask):
                     time.sleep(final_interval)
         else:
             # 直接移动回去
-            win32api.SetCursorPos(original_pos)
+            self._atomic_set_cursor_pos(original_pos)
     
     def move_mouse_abs_with_trajectory(self, target_abs_x, target_abs_y, duration=None):
         """
@@ -1013,15 +1086,19 @@ class BaseDNATask(BaseTask):
             target_abs_x, target_abs_y: 目标位置（屏幕绝对坐标）
             duration: 移动总时长（秒），None则根据距离自动计算
         """
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
+        if not self.hwnd.is_foreground():
+            return
+        
         # 获取当前鼠标位置
         current_pos = win32api.GetCursorPos()
         
         # 计算距离
         distance = ((target_abs_x - current_pos[0])**2 + (target_abs_y - current_pos[1])**2)**0.5
         
-        # 如果距离太小，直接移动
+        # 距离太小，直接移动
         if distance < 5:
-            win32api.SetCursorPos((target_abs_x, target_abs_y))
+            self._atomic_set_cursor_pos((target_abs_x, target_abs_y))
             return
         
         # 根据距离自动计算移动时长
@@ -1038,7 +1115,9 @@ class BaseDNATask(BaseTask):
         points_count = len(trajectory)
         
         for i, (x, y) in enumerate(trajectory):
-            win32api.SetCursorPos((int(x), int(y)))
+            # 原子移动
+            if not self._atomic_set_cursor_pos((int(x), int(y))):
+                break
             
             # 使用缓动函数计算延迟（加速-匀速-减速）
             progress = i / (points_count - 1) if points_count > 1 else 1
@@ -1071,33 +1150,53 @@ class BaseDNATask(BaseTask):
             - PostMessage：直接向窗口发送点击消息
             - 不使用SendInput：避免影响全局鼠标光标位置
         """
-        # 后台模式下完全不移动鼠标，只模拟延时
-        # 计算一个合理的延时（模拟从当前位置到目标位置的移动时间）
-        current_pos = win32api.GetCursorPos()
+        self.trace_call("_perform_background_click", x=x, y=y, down_time=round(down_time, 3))
+        
+        # ========== 关键防护：确保点击期间鼠标完全锁定 ==========
+        # 后台点击前，强制确认鼠标锁定状态（防止标志被意外清除）
+        original_mouse_lock = self.fidget_params.get("mouse_lock", False)
+        self.fidget_params["mouse_lock"] = True
+        
+        # 预先定义变量避免作用域问题
+        current_mouse_pos = None
         
         try:
-            target_abs = self.executor.interaction.capture.get_abs_cords(int(x), int(y))
-            logger.debug(f"[后台点击] 目标绝对坐标: {target_abs}")
+            # 后台模式下完全不移动鼠标，只模拟延时
+            # 不再获取鼠标位置，避免任何可能的鼠标操作
+            # 移除模拟移动延时，因为后台不需要模拟真实移动
             
-            distance = ((target_abs[0] - current_pos[0])**2 + (target_abs[1] - current_pos[1])**2)**0.5
-            logger.debug(f"[后台点击] 计算距离: {distance:.2f} 像素")
+            # 后台模式：仅使用PostMessage，不发送硬件信号
+            # SendInput会影响全局鼠标光标，后台模式不应该使用
+            logger.info(f"[后台点击] 执行PostMessage点击: 坐标=({x}, {y}), down_time={down_time:.3f}s")
             
-            # 根据距离计算延时（每1000像素约0.2-0.5秒）
-            simulated_move_delay = max(0.08, min(0.4, distance / 1000))
-            simulated_move_delay += random.uniform(-0.02, 0.03)
-            simulated_move_delay = max(0.05, simulated_move_delay)
-            logger.debug(f"[后台点击] 模拟移动延时: {simulated_move_delay:.3f}s")
+            # 获取当前鼠标位置（用于追踪）
+            try:
+                current_mouse_pos = win32api.GetCursorPos()
+                self.trace_call("PostMessage_click", target=(x, y), current_mouse=current_mouse_pos)
+            except Exception as e:
+                self.trace_call("PostMessage_click", target=(x, y), current_mouse="unknown", error=str(e))
             
-            self.sleep(simulated_move_delay)
-            logger.debug(f"[后台点击] 延时等待完成")
-        except Exception as e:
-            logger.debug(f"[后台点击] 计算延时失败，使用默认延时: {e}")
-            self.sleep(0.1)
-            logger.debug(f"[后台点击] 默认延时等待完成")
-        
-        # 后台模式：仅使用PostMessage，不发送硬件信号
-        # SendInput会影响全局鼠标光标，后台模式不应该使用
-        self.click(x, y, down_time=down_time)
+            self.click(x, y, down_time=down_time)
+            logger.info(f"[后台点击] PostMessage点击完成")
+            
+            # 点击后检查鼠标是否移动（用于追踪）
+            try:
+                after_mouse_pos = win32api.GetCursorPos()
+                if current_mouse_pos and current_mouse_pos != after_mouse_pos:
+                    self.trace_result("PostMessage_click", 
+                                    mouse_moved=True,
+                                    before=current_mouse_pos,
+                                    after=after_mouse_pos,
+                                    delta=(after_mouse_pos[0]-current_mouse_pos[0], 
+                                          after_mouse_pos[1]-current_mouse_pos[1]))
+                else:
+                    self.trace_result("PostMessage_click", mouse_moved=False)
+            except Exception as e:
+                self.trace_result("PostMessage_click", mouse_check="failed", error=str(e))
+            
+        finally:
+            # 恢复原始鼠标锁定状态
+            self.fidget_params["mouse_lock"] = original_mouse_lock
 
     def _perform_foreground_click(self, x, y, down_time, use_trajectory, restore_position):
         """
@@ -1156,6 +1255,10 @@ class BaseDNATask(BaseTask):
         """
         x = int(x_abs)
         y = int(y_abs)
+        
+        self.trace_call("_perform_random_click", x=x, y=y, down_time=round(down_time, 3), 
+                       post_sleep=round(post_sleep, 3), after_sleep=round(after_sleep, 3))
+        
         logger.debug(f"[_perform_random_click] ========== 点击请求 ==========")
         logger.debug(f"[_perform_random_click] 目标坐标: ({x}, {y})")
         logger.debug(f"[_perform_random_click] 参数: down_time={down_time:.3f}, post_sleep={post_sleep:.3f}, after_sleep={after_sleep:.3f}")
@@ -1167,7 +1270,9 @@ class BaseDNATask(BaseTask):
         logger.debug(f"[_perform_random_click] 随机化延时: post={_post_sleep:.3f}s, down={_down_time:.3f}s, after={_after_sleep:.3f}s")
         
         # 锁定鼠标，暂停 fidget_action 的鼠标抖动
-        logger.debug(f"[_perform_random_click] 锁定鼠标 (mouse_lock=True)")
+        # 保存原始状态，避免覆盖复位流程等外部设置的锁定
+        original_mouse_lock = self.fidget_params.get("mouse_lock", False)
+        logger.debug(f"[_perform_random_click] 锁定鼠标 (mouse_lock=True, original={original_mouse_lock})")
         self.fidget_params["mouse_lock"] = True
         
         try:
@@ -1178,15 +1283,15 @@ class BaseDNATask(BaseTask):
 
             original_pos = None
             is_foreground = self.hwnd.is_foreground()
-            logger.debug(f"[_perform_random_click] 窗口状态检查: is_foreground={is_foreground}")
+            logger.info(f"[点击] 窗口状态: {'前台' if is_foreground else '后台'}模式")
             
             if not is_foreground:
                 # 后台模式：完全不移动鼠标
-                logger.debug(f"[点击模式] ========== 选择后台模式 ==========")
+                logger.info(f"[点击模式] ========== 使用后台点击 ==========")
                 self._perform_background_click(x, y, _down_time)
             else:
                 # 前台模式：移动鼠标并点击
-                logger.debug(f"[点击模式] ========== 选择前台模式 ==========")
+                logger.info(f"[点击模式] ========== 使用前台点击 ==========")
                 original_pos = self._perform_foreground_click(x, y, _down_time, use_trajectory, restore_position)
             
             # 点击后延迟
@@ -1200,9 +1305,10 @@ class BaseDNATask(BaseTask):
                 self.restore_mouse_position(original_pos, use_trajectory=use_trajectory)
         
         finally:
-            # 无论如何都要释放鼠标锁
-            logger.debug(f"[_perform_random_click] 释放鼠标锁 (mouse_lock=False)")
-            self.fidget_params["mouse_lock"] = False
+            # 恢复原始鼠标锁状态（而不是强制设为False）
+            # 这样可以保留复位流程等外部设置的锁定状态
+            logger.debug(f"[_perform_random_click] 恢复鼠标锁状态 (mouse_lock={original_mouse_lock})")
+            self.fidget_params["mouse_lock"] = original_mouse_lock
             logger.debug(f"[_perform_random_click] ========== 点击完成 ==========")
 
     def click_btn_random(self, box: Box, safe_move_box: Box = None, down_time=0.0, post_sleep=0.0, after_sleep=0.0):
@@ -1362,6 +1468,10 @@ class BaseDNATask(BaseTask):
             boxes: 边界框限制，如果鼠标不在指定框内则不移动
             use_trajectory: 是否使用贝塞尔曲线轨迹移动
         """
+        # 第一步：立即检查窗口状态，后台模式不移动鼠标
+        if not self.hwnd.is_foreground():
+            return False
+        
         if not self.is_mouse_in_window():
             return False
         if isinstance(boxes, Box):
@@ -1378,12 +1488,10 @@ class BaseDNATask(BaseTask):
         target_y = self.height_of_screen(y)
         
         if use_trajectory:
-            # 前台和后台都使用贝塞尔曲线移动
             self.move_mouse_with_trajectory(target_x, target_y)
         else:
-            # 仅当明确禁用轨迹时直接移动
             abs_pos = self.executor.device_manager.hwnd_window.get_abs_cords(target_x, target_y)
-            win32api.SetCursorPos(abs_pos)
+            self._atomic_set_cursor_pos(abs_pos)
         return True
 
     def create_ticker(self, action: Callable, interval: Union[float, int, Callable] = 1.0, interval_random_range: tuple = (1.0, 1.0)) -> Ticker:
@@ -1513,9 +1621,16 @@ class BaseDNATask(BaseTask):
         return calculate_dx, calculate_dy
 
     def move_mouse_relative(self, dx, dy, use_aim_sensitivity=False, original_Xsensitivity=1.0, original_Ysensitivity=1.0):
+        """
+        相对移动鼠标（用于游戏内视角控制）
+        
+        注意：此方法用于主动控制游戏视角，会尝试将窗口切换到前台
+        如果需要后台安全的移动，请使用 _atomic_move_relative
+        """
         dx, dy = self.calculate_sensitivity(dx, dy, use_aim_sensitivity, original_Xsensitivity, original_Ysensitivity)
         self.try_bring_to_front()
-        self.genshin_interaction.move_mouse_relative(int(dx), int(dy))
+        # 使用原子方法移动，保证窗口状态检查
+        self._atomic_move_relative(int(dx), int(dy))
 
     def try_bring_to_front(self):
         if not self.hwnd.is_foreground():
@@ -1611,27 +1726,27 @@ class BaseDNATask(BaseTask):
 
         def perform_mouse_jitter(current_drift):
             """执行鼠标微小抖动，返回更新后的漂移量"""
-            # 检查鼠标锁：如果主线程正在执行点击操作，则跳过抖动
-            if self.fidget_params.get("mouse_lock", False):
+            # 最高优先级：复位进行中时完全禁用鼠标操作
+            if self.fidget_params.get("reset_in_progress", False):
+                self.trace_call("perform_mouse_jitter", action="blocked_by_reset_in_progress")
                 return current_drift
             
-            # 后台模式下禁用鼠标抖动，避免干扰PostMessage点击
+            # 检查鼠标锁：如果主线程正在执行点击操作，则跳过抖动
+            if self.fidget_params.get("mouse_lock", False):
+                self.trace_call("perform_mouse_jitter", action="blocked_by_mouse_lock")
+                return current_drift
+            
+            # 后台模式下禁用鼠标抖动
             if not self.hwnd.is_foreground():
+                self.trace_call("perform_mouse_jitter", action="blocked_by_background_mode")
                 return current_drift
             
             if not self.afk_config.get("鼠标抖动", True) or self.fidget_params.get("skip_jitter", False):
                 return current_drift
 
-            # 在实际移动鼠标前，二次检查窗口状态（防止多线程竞态条件）
+            # 如果需要，确保鼠标在窗口范围内（set_mouse_in_window 内部会再次检查窗口状态）
             if self.afk_config.get("鼠标抖动锁定在窗口范围", True):
-                # 二次验证窗口在前台，避免在用户切换窗口的瞬间移动鼠标
-                if not self.hwnd.is_foreground():
-                    return current_drift
                 self.set_mouse_in_window()
-
-            # 执行鼠标抖动前的最后一次窗口状态检查
-            if not self.hwnd.is_foreground():
-                return current_drift
 
             dist_sq = current_drift[0]**2 + current_drift[1]**2
 
@@ -1648,10 +1763,15 @@ class BaseDNATask(BaseTask):
             if move_x == 0 and move_y == 0:
                 move_x = 1 if random.random() > 0.5 else -1
 
-            self.genshin_interaction.do_move_mouse_relative(move_x, move_y)
+            self.trace_call("perform_mouse_jitter", move_x=move_x, move_y=move_y)
             
-            current_drift[0] += move_x
-            current_drift[1] += move_y
+            # 原子相对移动
+            if self._atomic_move_relative(move_x, move_y):
+                current_drift[0] += move_x
+                current_drift[1] += move_y
+                self.trace_result("perform_mouse_jitter", success=True, drift=current_drift)
+            else:
+                self.trace_result("perform_mouse_jitter", success=False, reason="move_failed")
             
             return current_drift
 
@@ -1696,6 +1816,11 @@ class BaseDNATask(BaseTask):
 
             while self.executor.current_task is not None and not self.executor.exit_event.is_set():
                 if self.executor.paused:
+                    time.sleep(0.1)
+                    continue
+                
+                # 复位进行中时，跳过所有fidget操作（特别是鼠标抖动）
+                if self.fidget_params.get("reset_in_progress", False):
                     time.sleep(0.1)
                     continue
 

@@ -111,7 +111,7 @@ class AutoMazeTask(BaseDNATask, TriggerTask):
         if use_trajectory:
             self.move_mouse_abs_with_trajectory(abs_x, abs_y)
         else:
-            win32api.SetCursorPos((abs_x, abs_y))
+            self._atomic_set_cursor_pos((abs_x, abs_y))
         
         self.sleep_random(0.1, random_range=(1, 1.2))
         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
@@ -128,7 +128,7 @@ class AutoMazeTask(BaseDNATask, TriggerTask):
             if use_trajectory:
                 self.move_mouse_abs_with_trajectory(abs_x, abs_y, duration=move_delay * 0.8)
             else:
-                win32api.SetCursorPos((abs_x, abs_y))
+                self._atomic_set_cursor_pos((abs_x, abs_y))
             
             self.sleep_random(move_delay, random_range=(1, 1.2))
 

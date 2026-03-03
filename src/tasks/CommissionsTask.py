@@ -518,57 +518,190 @@ class CommissionsTask(BaseDNATask):
             return True
 
     def reset_and_transport(self):
+        """
+        复位传送流程 - 支持完全后台模式
+        
+        在后台模式下，PostMessage点击可能比前台模式慢，因此：
+        1. 增加每步操作的超时时间
+        2. 添加重试机制
+        3. 增加操作间的等待时间
+        4. **完全阻塞fidget_action的鼠标抖动，防止UI拖动**
+        """
         from ok import Logger
         logger = Logger.get_logger(__name__)
         
-        logger.info("[复位] 开始复位传送流程")
-        self.open_in_mission_menu()
+        is_background = not self.hwnd.is_foreground()
+        mode_text = "后台" if is_background else "前台"
+        logger.info(f"[复位] 开始复位传送流程 (运行模式: {mode_text})")
         
-        logger.info("[复位] 等待ESC菜单关闭")
-        self.wait_until(
-            condition=lambda: not self.find_esc_menu(),
-            post_action=lambda: self.click_relative_random(0.688, 0.875, 0.770, 0.956),
-            time_out=10,
-        )
+        # ========== 启动DEBUG追踪 ==========
+        self.start_debug_trace("reset_and_transport")
         
-        logger.info("[复位] 查找设置-其他选项")
-        setting_box = self.box_of_screen_scaled(2560, 1440, 738, 4, 1123, 79, name="other_section", hcenter=True)
-        setting_other = self.wait_until(lambda: self.find_one("setting_other", box=setting_box), time_out=10,
-                                        raise_if_not_found=True)
+        # ========== 关键：阻塞所有后台鼠标操作 ==========
+        # 保存原始状态
+        original_mouse_lock = self.fidget_params.get("mouse_lock", False)
+        original_skip_jitter = self.fidget_params.get("skip_jitter", False)
         
-        logger.info("[复位] 点击设置-其他并等待选中")
-        self.wait_until(
-            condition=lambda: self.calculate_color_percentage(setting_menu_selected_color, setting_other) > 0.24,
-            post_action=lambda: self.click_box_random(setting_other),
-            time_out=10,
-        )
+        # 1. 设置复位标志 - 最高优先级的阻塞标志
+        self.fidget_params["reset_in_progress"] = True
         
-        logger.info("[复位] 点击复位按钮")
-        confirm_box = self.box_of_screen_scaled(2560, 1440, 1298, 776, 1368, 843, name="confirm_btn", hcenter=True)
-        safe_box = self.box_of_screen_scaled(2560, 1440, 125, 207, 1811, 1234, name="safe_box", hcenter=True)
-        self.wait_until(
-            condition=lambda: self.find_start_btn(box=confirm_box),
-            post_action=lambda: self.click_relative_random(0.5016, 0.4074, 0.6906, 0.4380, use_safe_move=True, safe_move_box=safe_box),
-            time_out=10,
-        )
+        # 2. 完全锁定鼠标和抖动，防止fidget_action干扰复位点击
+        self.fidget_params["mouse_lock"] = True
+        self.fidget_params["skip_jitter"] = True
+        logger.info("[复位] 已设置复位阻塞标志 (reset_in_progress + mouse_lock + skip_jitter)")
         
-        logger.info("[复位] 确认复位操作")
-        self.sleep(0.25)
-        safe_box = self.box_of_screen_scaled(2560, 1440, 1298, 772, 1735, 846, name="safe_box", hcenter=True)
-        self.wait_until(
-            condition=lambda: not self.find_start_btn(box=confirm_box),
-            post_action=lambda: self.click_relative_random(0.531, 0.547, 0.671, 0.578, after_sleep=0.5, use_safe_move=True, safe_move_box=safe_box),
-            time_out=10,
-        )
+        # 3. 等待fidget_action看到锁定标志（确保当前循环完成）
+        # fidget_action循环间隔约0.1s，等待0.2s足够
+        time.sleep(0.2)
+        logger.info("[复位] fidget_action已完全停止鼠标操作")
         
-        logger.info("[复位] 等待返回队伍界面（超时20秒）")
-        if not self.wait_until(self.in_team, time_out=20):
-            logger.error("[复位] 20秒内未检测到返回队伍界面，复位失败")
-            self.ensure_main()
-            return False
-        
-        logger.info("[复位] 复位传送完成")
-        return True
+        try:
+            # 后台模式下使用更长的超时时间和延迟
+            click_timeout = 15 if is_background else 10
+            confirm_timeout = 15 if is_background else 10
+            team_timeout = 25 if is_background else 20
+            
+            # 延迟配置：保持最小必要延迟
+            # 操作间基础延迟
+            base_delay = 0.2 if is_background else 0.2
+            # 点击前延迟（防止操作过快）
+            click_post = 0.1 if is_background else 0.1
+            # 点击后延迟（确保UI响应）
+            click_after = 0.2 if is_background else 0.2
+            
+            logger.info(f"[复位] 延迟配置: base={base_delay}s, post={click_post}s, after={click_after}s")
+            
+            # ========== 步骤1: 打开ESC菜单 ==========
+            self.open_in_mission_menu()
+            logger.info("[复位] ESC菜单已打开")
+            
+            # ========== 步骤2: 点击进入设置 ==========
+            logger.info("[复位] 等待ESC菜单关闭")
+            success = self.wait_until(
+                condition=lambda: not self.find_esc_menu(),
+                post_action=lambda: self.click_relative_random(
+                    0.688, 0.875, 0.770, 0.956,
+                    post_sleep=click_post,
+                    after_sleep=click_after
+                ),
+                time_out=click_timeout,
+            )
+            if not success and is_background:
+                # 后台模式重试一次
+                logger.warning("[复位] 后台模式首次尝试超时，重试点击")
+                self.click_relative_random(0.688, 0.875, 0.770, 0.956, post_sleep=click_post, after_sleep=click_after)
+                self.sleep(base_delay)
+            
+            logger.info("[复位] 已进入设置界面")
+            
+            # ========== 步骤3: 查找并点击"其他"选项卡 ==========
+            logger.info("[复位] 查找设置-其他选项")
+            setting_box = self.box_of_screen_scaled(2560, 1440, 738, 4, 1123, 79, name="other_section", hcenter=True)
+            setting_other = self.wait_until(lambda: self.find_one("setting_other", box=setting_box), time_out=click_timeout,
+                                            raise_if_not_found=True)
+            
+            logger.info("[复位] 点击设置-其他并等待选中")
+            self.wait_until(
+                condition=lambda: self.calculate_color_percentage(setting_menu_selected_color, setting_other) > 0.24,
+                post_action=lambda: self.click_box_random(setting_other, post_sleep=click_post, after_sleep=click_after),
+                time_out=click_timeout,
+            )
+            
+            logger.info("[复位] 其他选项卡已选中")
+            
+            # ========== 步骤4: 点击复位按钮 ==========
+            logger.info("[复位] 点击复位按钮")
+            
+            # 确认阻塞标志仍然有效
+            logger.info(f"[复位] 检查阻塞标志: reset_in_progress={self.fidget_params.get('reset_in_progress', False)}, "
+                       f"mouse_lock={self.fidget_params.get('mouse_lock', False)}")
+            
+            confirm_box = self.box_of_screen_scaled(2560, 1440, 1298, 776, 1368, 843, name="confirm_btn", hcenter=True)
+            safe_box = self.box_of_screen_scaled(2560, 1440, 125, 207, 1811, 1234, name="safe_box", hcenter=True)
+            
+            # 在关键点击前额外等待，确保fidget完全停止
+            if is_background:
+                logger.info("[复位] 后台模式：关键点击前额外等待")
+                time.sleep(0.2)
+            
+            click_success = self.wait_until(
+                condition=lambda: self.find_start_btn(box=confirm_box),
+                post_action=lambda: self.click_relative_random(
+                    0.5016, 0.4074, 0.6906, 0.4380,
+                    post_sleep=click_post,
+                    after_sleep=click_after
+                ),
+                time_out=click_timeout,
+            )
+            
+            if not click_success:
+                logger.warning(f"[复位] 点击复位按钮超时({click_timeout}秒)")
+                if is_background:
+                    logger.info("[复位] 后台模式：尝试额外点击")
+                    self.click_relative_random(0.5016, 0.4074, 0.6906, 0.4380, post_sleep=click_post, after_sleep=click_after)
+            
+            logger.info("[复位] 复位确认对话框已弹出")
+            
+            # ========== 步骤5: 确认复位操作 ==========
+            logger.info("[复位] 确认复位操作")
+            
+            # 再次确认阻塞标志有效
+            logger.info(f"[复位] 确认前检查阻塞标志: reset_in_progress={self.fidget_params.get('reset_in_progress', False)}, "
+                       f"mouse_lock={self.fidget_params.get('mouse_lock', False)}")
+            
+            safe_box = self.box_of_screen_scaled(2560, 1440, 1298, 772, 1735, 846, name="safe_box", hcenter=True)
+            
+            # 检查确认按钮是否存在
+            start_btn_found = self.find_start_btn(box=confirm_box)
+            logger.info(f"[复位] 确认按钮检查: 存在={start_btn_found is not None}")
+            
+            if start_btn_found:
+                # 关键点击前额外等待
+                if is_background:
+                    logger.info("[复位] 后台模式：确认点击前额外等待")
+                    time.sleep(0.2)
+                confirm_success = self.wait_until(
+                    condition=lambda: not self.find_start_btn(box=confirm_box),
+                    post_action=lambda: self.click_relative_random(
+                        0.531, 0.547, 0.671, 0.578,
+                        post_sleep=click_post,
+                        after_sleep=click_after
+                    ),
+                    time_out=confirm_timeout,
+                )
+                
+                if not confirm_success and is_background:
+                    # 后台模式重试
+                    logger.warning("[复位] 后台模式确认超时，重试点击")
+                    self.click_relative_random(0.531, 0.547, 0.671, 0.578, post_sleep=click_post, after_sleep=click_after)
+            else:
+                logger.warning("[复位] 未找到确认按钮，可能已经确认")
+            
+            # 检查点击后的状态
+            start_btn_after = self.find_start_btn(box=confirm_box)
+            logger.info(f"[复位] 确认后检查: 按钮存在={start_btn_after is not None} (应为False)")
+            logger.info("[复位] 复位操作已确认，等待传送动画")
+            
+            # ========== 步骤6: 等待返回队伍界面 ==========
+            logger.info(f"[复位] 等待返回队伍界面（超时{team_timeout}秒）")
+            if not self.wait_until(self.in_team, time_out=team_timeout):
+                logger.error(f"[复位] {team_timeout}秒内未检测到返回队伍界面，复位失败")
+                self.ensure_main()
+                return False
+            
+            logger.info(f"[复位] 复位传送完成 ({mode_text}模式)")
+            return True
+            
+        finally:
+            # ========== 恢复鼠标操作状态 ==========
+            self.fidget_params["reset_in_progress"] = False
+            self.fidget_params["mouse_lock"] = original_mouse_lock
+            self.fidget_params["skip_jitter"] = original_skip_jitter
+            logger.info(f"[复位] 已清除复位阻塞标志并恢复鼠标操作 (mouse_lock={original_mouse_lock}, skip_jitter={original_skip_jitter})")
+            
+            # ========== 停止DEBUG追踪并输出日志 ==========
+            self.stop_debug_trace()
+
 
     def find_letter_interface(self):
         box = self.find_letter_btn() or self.find_not_use_letter_icon()
