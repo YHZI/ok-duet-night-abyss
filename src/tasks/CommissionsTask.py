@@ -116,7 +116,7 @@ class CommissionsTask(BaseDNATask):
                 random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
                 random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
                 self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
-                self.sleep(random.uniform(0.02, 0.05))
+                self.sleep(random.uniform(0.3, 0.6))
                 self.send_key("r", after_sleep=0.2)
             elif (btn := self.find_bottom_start_btn() or self.find_big_bottom_start_btn()):
                 self.click_btn_random(btn, safe_move_box=box, after_sleep=0.2)

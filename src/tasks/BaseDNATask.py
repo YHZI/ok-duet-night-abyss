@@ -309,7 +309,7 @@ class MouseHardwareSpoofer:
             return False
         
         # 短暂延迟（模拟人手反应时间）
-        time.sleep(random.uniform(0.01, 0.03))
+        time.sleep(0.1)
         
         # 执行点击
         return self.click_mouse(button, down_time)
@@ -762,7 +762,8 @@ class BaseDNATask(BaseTask):
                  t**3 * end_y)
             
             # 添加正弦波动模拟人手抖动（在移动中间部分波动更明显）
-            if 0.1 < t < 0.9:  # 起点和终点附近不添加太多波动
+            # 最后一个点不添加任何波动，确保精确到达目标
+            if 0.1 < t < 0.85:  # 起点和终点附近不添加太多波动
                 wave_t = t * wave_frequency * 3.14159  # 波动相位
                 wave_intensity = 4 * t * (1 - t)  # 中间部分波动最大
                 
@@ -776,13 +777,20 @@ class BaseDNATask(BaseTask):
                 x += random.uniform(-jitter, jitter)
                 y += random.uniform(-jitter, jitter)
             
-            points.append((int(x), int(y)))
+            # 最后一个点直接使用目标坐标，不进行四舍五入，确保精确
+            if i == num_points - 1:
+                points.append((int(end_x), int(end_y)))
+            else:
+                points.append((int(x), int(y)))
         
-        # 去除重复的连续点（优化轨迹）
+        # 去除重复的连续点（优化轨迹），但始终保留最后一个点
         optimized_points = [points[0]]
-        for i in range(1, len(points)):
+        for i in range(1, len(points) - 1):
             if points[i] != optimized_points[-1]:
                 optimized_points.append(points[i])
+        # 确保最后一个点（精确目标位置）总是被添加
+        if points[-1] != optimized_points[-1]:
+            optimized_points.append(points[-1])
         
         return optimized_points
 
@@ -876,6 +884,15 @@ class BaseDNATask(BaseTask):
                 
                 if i < points_count - 1:  # 最后一个点不需要延迟
                     time.sleep(final_interval)
+            
+            # 确保最终精确到达目标位置（防止轨迹偏差）
+            if use_hardware_spoof:
+                try:
+                    mouse_spoofer.move_mouse_absolute(int(target_abs[0]), int(target_abs[1]))
+                except Exception:
+                    win32api.SetCursorPos(target_abs)
+            else:
+                win32api.SetCursorPos(target_abs)
             
             return original_pos
         finally:
@@ -1035,14 +1052,14 @@ class BaseDNATask(BaseTask):
             # 后台模式：也支持轨迹移动，使行为更真实
             if use_trajectory:
                 original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
-                self.sleep(random.uniform(0.05, 0.08))
+                self.sleep(0.1)
             else:
                 if restore_position:
                     original_pos = win32api.GetCursorPos()
                 # 直接移动到目标位置
                 abs_pos = self.executor.interaction.capture.get_abs_cords(x, y)
                 win32api.SetCursorPos(abs_pos)
-                self.sleep(random.uniform(0.08, 0.12))
+                self.sleep(0.1)
             
             # 使用PostMessage点击
             self.click(x, y, down_time=_down_time)
@@ -1050,12 +1067,12 @@ class BaseDNATask(BaseTask):
             # 前台模式：使用硬件伪装点击
             if use_trajectory:
                 original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
-                self.sleep(random.uniform(0.05, 0.08))
+                self.sleep(0.1)
             else:
                 if restore_position:
                     original_pos = win32api.GetCursorPos()
                 self.pydirect_interaction.move(x, y)
-                self.sleep(random.uniform(0.08, 0.12))
+                self.sleep(0.1)
             
             # 尝试使用鼠标硬件伪装点击
             try:
@@ -1085,8 +1102,20 @@ class BaseDNATask(BaseTask):
         _safe_move_box = box.copy(x_offset=-box.width*0.20, width_offset=box.width * 8.1,
                                  y_offset=-box.height*0.30, height_offset=box.height * 0.7, name='safe_move_box')
         
-        x_range = [box.x + box.width, box.x + self.width * 0.12]
-        y_range = [box.y, box.y + box.height]
+        # 在按钮范围内随机选择点击位置，更集中在中心区域
+        # 增加边距使点击范围更小，避免边缘区域
+        margin_x = box.width * 0.25  # 左右各留25%边距
+        margin_y = box.height * 0.25  # 上下各留25%边距
+        
+        x_range = [box.x + margin_x, box.x + box.width - margin_x]
+        y_range = [box.y + margin_y, box.y + box.height - margin_y]
+        
+        # 确保范围有效，如果box太小则使用中心区域
+        if x_range[0] >= x_range[1]:
+            x_range = [box.x + box.width * 0.35, box.x + box.width * 0.65]
+        if y_range[0] >= y_range[1]:
+            y_range = [box.y + box.height * 0.35, box.y + box.height * 0.65]
+        
         random_x = random.uniform(x_range[0], x_range[1])
         random_y = random.uniform(y_range[0], y_range[1])
 
@@ -1115,8 +1144,29 @@ class BaseDNATask(BaseTask):
         ue_px = up_extend * self.height
         de_px = down_extend * self.height
 
-        x_range = [box.x - le_px, box.x + box.width + re_px]
-        y_range = [box.y - ue_px, box.y + box.height + de_px]
+        # 计算基础范围
+        base_x_min = box.x - le_px
+        base_x_max = box.x + box.width + re_px
+        base_y_min = box.y - ue_px
+        base_y_max = box.y + box.height + de_px
+        
+        # 如果没有扩展参数，则在box内部缩小范围，更集中在中心
+        if left_extend == 0 and right_extend == 0 and up_extend == 0 and down_extend == 0:
+            margin_x = box.width * 0.20  # 左右各留20%边距
+            margin_y = box.height * 0.20  # 上下各留20%边距
+            x_range = [base_x_min + margin_x, base_x_max - margin_x]
+            y_range = [base_y_min + margin_y, base_y_max - margin_y]
+            
+            # 确保范围有效
+            if x_range[0] >= x_range[1]:
+                x_range = [base_x_min + (base_x_max - base_x_min) * 0.35, base_x_min + (base_x_max - base_x_min) * 0.65]
+            if y_range[0] >= y_range[1]:
+                y_range = [base_y_min + (base_y_max - base_y_min) * 0.35, base_y_min + (base_y_max - base_y_min) * 0.65]
+        else:
+            # 有扩展参数时使用完整范围
+            x_range = [base_x_min, base_x_max]
+            y_range = [base_y_min, base_y_max]
+        
         random_x = random.uniform(x_range[0], x_range[1])
         random_y = random.uniform(y_range[0], y_range[1])
 
@@ -1133,8 +1183,29 @@ class BaseDNATask(BaseTask):
         )
 
     def click_relative_random(self, x1, y1, x2, y2, down_time=0.0, post_sleep=0.0, after_sleep=0.0, use_safe_move=False, safe_move_box=None):
-        r_x = random.uniform(x1, x2)
-        r_y = random.uniform(y1, y2)
+        # 在给定的相对坐标范围内，更集中地选择中心区域
+        # 计算范围并缩小20%
+        x_range = x2 - x1
+        y_range = y2 - y1
+        margin_x = x_range * 0.20
+        margin_y = y_range * 0.20
+        
+        # 调整后的范围
+        adj_x1 = x1 + margin_x
+        adj_x2 = x2 - margin_x
+        adj_y1 = y1 + margin_y
+        adj_y2 = y2 - margin_y
+        
+        # 确保范围有效
+        if adj_x1 >= adj_x2:
+            adj_x1 = x1 + x_range * 0.35
+            adj_x2 = x1 + x_range * 0.65
+        if adj_y1 >= adj_y2:
+            adj_y1 = y1 + y_range * 0.35
+            adj_y2 = y1 + y_range * 0.65
+        
+        r_x = random.uniform(adj_x1, adj_x2)
+        r_y = random.uniform(adj_y1, adj_y2)
 
         abs_x = self.width_of_screen(r_x)
         abs_y = self.height_of_screen(r_y)
