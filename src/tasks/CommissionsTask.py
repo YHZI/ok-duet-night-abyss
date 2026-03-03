@@ -86,37 +86,53 @@ class CommissionsTask(BaseDNATask):
         return self.find_one("quit_big_icon", threshold=threshold)
 
     def open_in_mission_menu(self, time_out=20, raise_if_not_found=True):
+        from ok import Logger
+        logger = Logger.get_logger(__name__)
+        
         if self.find_esc_menu():
+            logger.info("[open_in_mission_menu] ESC菜单已打开")
             return True
         found = False
         start = time.time()
         while time.time() - start < time_out:
-            # 按键前先移动鼠标，模拟真实用户行为
-            random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
-            random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
-            self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
-            self.sleep(random.uniform(0.02, 0.05))
+            is_foreground = self.hwnd.is_foreground()
+            
+            # 按键前先移动鼠标，模拟真实用户行为（仅前台模式）
+            if is_foreground:
+                random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
+                random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
+                self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
+                self.sleep(random.uniform(0.02, 0.05))
             self.send_key("esc")
             if self.wait_until(self.find_esc_menu, time_out=2, raise_if_not_found=False):
+                logger.info("[open_in_mission_menu] ESC菜单已打开")
                 found = True
                 break
         else:
             if raise_if_not_found:
+                logger.error("[open_in_mission_menu] 未找到任务菜单")
                 raise Exception("未找到任务菜单")
         self.sleep(0.2)
         return found
 
     def start_mission(self, timeout=0):
+        from ok import Logger
+        logger = Logger.get_logger(__name__)
+        
         action_timeout = self.action_timeout if timeout == 0 else timeout
         box = self.box_of_screen_scaled(2560, 1440, 69, 969, 2498, 1331, name="reward_drag_area", hcenter=True)
         start_time = time.time()
         while time.time() - start_time < action_timeout:
             if self.find_retry_btn():
-                # 按键前先移动鼠标，模拟真实用户行为
-                random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
-                random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
-                self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
-                self.sleep(random.uniform(0.3, 0.6))
+                is_foreground = self.hwnd.is_foreground()
+                
+                # 按键前先移动鼠标，模拟真实用户行为（仅前台模式）
+                if is_foreground:
+                    random_x = random.randint(self.width_of_screen(0.3), self.width_of_screen(0.7))
+                    random_y = random.randint(self.height_of_screen(0.3), self.height_of_screen(0.7))
+                    self.move_mouse_with_trajectory(random_x, random_y, duration=0.15)
+                else:
+                    self.sleep(random.uniform(0.3, 0.6))
                 self.send_key("r", after_sleep=0.2)
             elif (btn := self.find_bottom_start_btn() or self.find_big_bottom_start_btn()):
                 self.click_btn_random(btn, safe_move_box=box, after_sleep=0.2)
@@ -508,26 +524,26 @@ class CommissionsTask(BaseDNATask):
         logger.info("[复位] 开始复位传送流程")
         self.open_in_mission_menu()
         
-        logger.debug("[复位] 等待ESC菜单关闭")
+        logger.info("[复位] 等待ESC菜单关闭")
         self.wait_until(
             condition=lambda: not self.find_esc_menu(),
-            post_action=self.click_relative_random(0.688, 0.875, 0.770, 0.956),
+            post_action=lambda: self.click_relative_random(0.688, 0.875, 0.770, 0.956),
             time_out=10,
         )
         
-        logger.debug("[复位] 查找设置-其他选项")
+        logger.info("[复位] 查找设置-其他选项")
         setting_box = self.box_of_screen_scaled(2560, 1440, 738, 4, 1123, 79, name="other_section", hcenter=True)
         setting_other = self.wait_until(lambda: self.find_one("setting_other", box=setting_box), time_out=10,
                                         raise_if_not_found=True)
         
-        logger.debug("[复位] 点击设置-其他并等待选中")
+        logger.info("[复位] 点击设置-其他并等待选中")
         self.wait_until(
             condition=lambda: self.calculate_color_percentage(setting_menu_selected_color, setting_other) > 0.24,
             post_action=lambda: self.click_box_random(setting_other),
             time_out=10,
         )
         
-        logger.debug("[复位] 点击复位按钮")
+        logger.info("[复位] 点击复位按钮")
         confirm_box = self.box_of_screen_scaled(2560, 1440, 1298, 776, 1368, 843, name="confirm_btn", hcenter=True)
         safe_box = self.box_of_screen_scaled(2560, 1440, 125, 207, 1811, 1234, name="safe_box", hcenter=True)
         self.wait_until(
@@ -536,7 +552,7 @@ class CommissionsTask(BaseDNATask):
             time_out=10,
         )
         
-        logger.debug("[复位] 确认复位操作")
+        logger.info("[复位] 确认复位操作")
         self.sleep(0.25)
         safe_box = self.box_of_screen_scaled(2560, 1440, 1298, 772, 1735, 846, name="safe_box", hcenter=True)
         self.wait_until(
@@ -545,7 +561,7 @@ class CommissionsTask(BaseDNATask):
             time_out=10,
         )
         
-        logger.debug("[复位] 等待返回队伍界面（超时20秒）")
+        logger.info("[复位] 等待返回队伍界面（超时20秒）")
         if not self.wait_until(self.in_team, time_out=20):
             logger.error("[复位] 20秒内未检测到返回队伍界面，复位失败")
             self.ensure_main()

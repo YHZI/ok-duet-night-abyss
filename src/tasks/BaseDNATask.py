@@ -553,6 +553,13 @@ class BaseDNATask(BaseTask):
         self.log_info(msg, notify=self.afk_config['弹出通知'])
 
     def move_mouse_to_safe_position(self, save_current_pos: bool = True, boxes: Union[list[Box], Box, None] = None):
+        # 后台模式下不移动鼠标
+        if not self.hwnd.is_foreground():
+            logger.debug(f"[move_mouse_to_safe_position] 窗口在后台，跳过移动")
+            return
+        
+        logger.debug(f"[move_mouse_to_safe_position] 移动鼠标到安全位置, save_pos={save_current_pos}")
+        
         if self.afk_config["防止鼠标干扰"]:
             self.old_mouse_pos = win32api.GetCursorPos() if save_current_pos else None
             if self.rel_move_if_in_win(0.95, 0.6, boxes=boxes):
@@ -561,6 +568,13 @@ class BaseDNATask(BaseTask):
                 self.old_mouse_pos = None
 
     def move_back_from_safe_position(self):
+        # 后台模式下不移动鼠标
+        if not self.hwnd.is_foreground():
+            logger.debug(f"[move_back_from_safe_position] 窗口在后台，跳过移动")
+            return
+        
+        logger.debug(f"[move_back_from_safe_position] 从安全位置移回")
+        
         if self.afk_config["防止鼠标干扰"] and self.old_mouse_pos is not None:
             win32api.SetCursorPos(self.old_mouse_pos)
             self.old_mouse_pos = None
@@ -664,11 +678,19 @@ class BaseDNATask(BaseTask):
         """
         if self.is_mouse_in_window():
             return
+        
+        # 后台模式下不移动鼠标
+        if not self.hwnd.is_foreground():
+            logger.debug(f"[set_mouse_in_window] 窗口在后台，跳过移动")
+            return
+        
+        logger.debug(f"[set_mouse_in_window] 鼠标不在窗口内，移动鼠标到窗口内")
+        
         random_x = random.randint(self.width_of_screen(0.2), self.width_of_screen(0.8))
         random_y = random.randint(self.height_of_screen(0.2), self.height_of_screen(0.8))
         
         if use_trajectory:
-            # 前台和后台都使用贝塞尔曲线移动
+            # 使用贝塞尔曲线移动
             self.move_mouse_with_trajectory(random_x, random_y)
         else:
             # 仅当明确禁用轨迹时直接移动
@@ -806,6 +828,15 @@ class BaseDNATask(BaseTask):
         返回:
             如果save_original_pos=True，返回原始鼠标位置(x, y)，否则返回None
         """
+        # 后台模式下不移动鼠标
+        if not self.hwnd.is_foreground():
+            logger.debug(f"[move_mouse_with_trajectory] 窗口在后台，跳过鼠标移动")
+            if save_original_pos:
+                return win32api.GetCursorPos()
+            return None
+        
+        logger.debug(f"[move_mouse_with_trajectory] 开始移动: 目标=({target_x}, {target_y}), duration={duration}")
+        
         # 锁定鼠标，暂停 fidget_action 的鼠标抖动
         self.fidget_params["mouse_lock"] = True
         
@@ -909,6 +940,13 @@ class BaseDNATask(BaseTask):
         """
         if original_pos is None:
             return
+        
+        # 后台模式下不移动鼠标
+        if not self.hwnd.is_foreground():
+            logger.debug(f"[restore_mouse_position] 窗口在后台，跳过鼠标复原")
+            return
+        
+        logger.debug(f"[restore_mouse_position] 复原鼠标到: {original_pos}")
         
         current_pos = win32api.GetCursorPos()
         
@@ -1020,83 +1058,152 @@ class BaseDNATask(BaseTask):
             if i < points_count - 1:
                 time.sleep(final_interval)
     
+    def _perform_background_click(self, x, y, down_time):
+        """
+        后台模式点击：不移动鼠标，仅使用PostMessage点击
+        
+        参数:
+            x, y: 目标点击位置（游戏窗口相对坐标）
+            down_time: 鼠标按下时长
+        
+        说明：
+            后台模式下纯粹使用PostMessage，不发送任何硬件信号
+            - PostMessage：直接向窗口发送点击消息
+            - 不使用SendInput：避免影响全局鼠标光标位置
+        """
+        # 后台模式下完全不移动鼠标，只模拟延时
+        # 计算一个合理的延时（模拟从当前位置到目标位置的移动时间）
+        current_pos = win32api.GetCursorPos()
+        
+        try:
+            target_abs = self.executor.interaction.capture.get_abs_cords(int(x), int(y))
+            logger.debug(f"[后台点击] 目标绝对坐标: {target_abs}")
+            
+            distance = ((target_abs[0] - current_pos[0])**2 + (target_abs[1] - current_pos[1])**2)**0.5
+            logger.debug(f"[后台点击] 计算距离: {distance:.2f} 像素")
+            
+            # 根据距离计算延时（每1000像素约0.2-0.5秒）
+            simulated_move_delay = max(0.08, min(0.4, distance / 1000))
+            simulated_move_delay += random.uniform(-0.02, 0.03)
+            simulated_move_delay = max(0.05, simulated_move_delay)
+            logger.debug(f"[后台点击] 模拟移动延时: {simulated_move_delay:.3f}s")
+            
+            self.sleep(simulated_move_delay)
+            logger.debug(f"[后台点击] 延时等待完成")
+        except Exception as e:
+            logger.debug(f"[后台点击] 计算延时失败，使用默认延时: {e}")
+            self.sleep(0.1)
+            logger.debug(f"[后台点击] 默认延时等待完成")
+        
+        # 后台模式：仅使用PostMessage，不发送硬件信号
+        # SendInput会影响全局鼠标光标，后台模式不应该使用
+        self.click(x, y, down_time=down_time)
+
+    def _perform_foreground_click(self, x, y, down_time, use_trajectory, restore_position):
+        """
+        前台模式点击：移动鼠标并使用硬件伪装点击
+        
+        参数:
+            x, y: 目标点击位置（游戏窗口相对坐标）
+            down_time: 鼠标按下时长
+            use_trajectory: 是否使用贝塞尔曲线轨迹移动
+            restore_position: 是否在点击后复原鼠标位置
+            
+        返回:
+            original_pos: 原始鼠标位置（如果需要复原）
+        """
+        original_pos = None
+        
+        # 移动鼠标到目标位置
+        if use_trajectory:
+            original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
+            self.sleep(0.1)
+        else:
+            if restore_position:
+                original_pos = win32api.GetCursorPos()
+            self.pydirect_interaction.move(x, y)
+            self.sleep(0.1)
+        
+        # 使用硬件伪装点击
+        try:
+            mouse_spoofer = get_mouse_spoofer()
+            actual_down_time = down_time + random.uniform(-0.01, 0.02)
+            actual_down_time = max(0.03, actual_down_time)
+            
+            success = mouse_spoofer.click_mouse('left', actual_down_time)
+            if not success:
+                self.pydirect_interaction.click(down_time=down_time)
+            logger.debug(f"[前台点击] 硬件伪装点击完成: ({x}, {y})")
+        except Exception as e:
+            logger.warning(f"[前台点击] 硬件伪装失败，使用备用方法: {e}")
+            self.pydirect_interaction.click(down_time=down_time)
+        
+        return original_pos
+
     def _perform_random_click(self, x_abs, y_abs, use_safe_move=False, safe_move_box: Union[list[Box], Box, None]=None, down_time=0.0, post_sleep=0.0, after_sleep=0.0, use_trajectory=True, restore_position=False):
         """
-        执行带随机延迟和轨迹移动的点击操作
+        执行带随机延迟的点击操作（统一入口）
         
         参数:
             x_abs, y_abs: 目标点击位置（游戏窗口相对坐标）
-            use_safe_move: 后台点击时是否使用安全移动（已弃用，后台也会移动鼠标）
-            safe_move_box: 安全移动区域（已弃用）
+            use_safe_move: 已弃用（保留参数兼容性）
+            safe_move_box: 已弃用（保留参数兼容性）
             down_time: 鼠标按下时长
             post_sleep: 点击前延迟
             after_sleep: 点击后延迟
-            use_trajectory: 是否使用贝塞尔曲线轨迹移动（前台和后台都支持）
-            restore_position: 是否在点击后复原鼠标位置
+            use_trajectory: 是否使用贝塞尔曲线轨迹移动（仅前台有效）
+            restore_position: 是否在点击后复原鼠标位置（仅前台有效）
         """
         x = int(x_abs)
         y = int(y_abs)
+        logger.debug(f"[_perform_random_click] ========== 点击请求 ==========")
+        logger.debug(f"[_perform_random_click] 目标坐标: ({x}, {y})")
+        logger.debug(f"[_perform_random_click] 参数: down_time={down_time:.3f}, post_sleep={post_sleep:.3f}, after_sleep={after_sleep:.3f}")
 
+        # 计算随机化的延时参数
         _post_sleep = 0.0 if post_sleep <= 0 else post_sleep + random.uniform(0.05, 0.15)
         _down_time = random.uniform(0.06, 0.13) if down_time <= 0 else max(0.05, down_time + random.uniform(0.0, 0.13))
         _after_sleep = random.uniform(0.01, 0.04) if after_sleep <= 0 else after_sleep + random.uniform(0.02, 0.08)
+        logger.debug(f"[_perform_random_click] 随机化延时: post={_post_sleep:.3f}s, down={_down_time:.3f}s, after={_after_sleep:.3f}s")
         
         # 锁定鼠标，暂停 fidget_action 的鼠标抖动
+        logger.debug(f"[_perform_random_click] 锁定鼠标 (mouse_lock=True)")
         self.fidget_params["mouse_lock"] = True
         
-        self.sleep(_post_sleep)
+        try:
+            # 点击前延迟
+            if _post_sleep > 0:
+                logger.debug(f"[_perform_random_click] 点击前延迟: {_post_sleep:.3f}s")
+            self.sleep(_post_sleep)
 
-        original_pos = None
-        
-        if not self.hwnd.is_foreground():
-            # 后台模式：也支持轨迹移动，使行为更真实
-            if use_trajectory:
-                original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
-                self.sleep(0.1)
-            else:
-                if restore_position:
-                    original_pos = win32api.GetCursorPos()
-                # 直接移动到目标位置
-                abs_pos = self.executor.interaction.capture.get_abs_cords(x, y)
-                win32api.SetCursorPos(abs_pos)
-                self.sleep(0.1)
+            original_pos = None
+            is_foreground = self.hwnd.is_foreground()
+            logger.debug(f"[_perform_random_click] 窗口状态检查: is_foreground={is_foreground}")
             
-            # 使用PostMessage点击
-            self.click(x, y, down_time=_down_time)
-        else:
-            # 前台模式：使用硬件伪装点击
-            if use_trajectory:
-                original_pos = self.move_mouse_with_trajectory(x, y, save_original_pos=restore_position)
-                self.sleep(0.1)
+            if not is_foreground:
+                # 后台模式：完全不移动鼠标
+                logger.debug(f"[点击模式] ========== 选择后台模式 ==========")
+                self._perform_background_click(x, y, _down_time)
             else:
-                if restore_position:
-                    original_pos = win32api.GetCursorPos()
-                self.pydirect_interaction.move(x, y)
-                self.sleep(0.1)
+                # 前台模式：移动鼠标并点击
+                logger.debug(f"[点击模式] ========== 选择前台模式 ==========")
+                original_pos = self._perform_foreground_click(x, y, _down_time, use_trajectory, restore_position)
             
-            # 尝试使用鼠标硬件伪装点击
-            try:
-                mouse_spoofer = get_mouse_spoofer()
-                # 添加随机抖动到按下时长
-                actual_down_time = _down_time + random.uniform(-0.01, 0.02)
-                actual_down_time = max(0.03, actual_down_time)
-                
-                success = mouse_spoofer.click_mouse('left', actual_down_time)
-                if not success:
-                    # 硬件伪装失败，回退到 PyDirectInteraction
-                    self.pydirect_interaction.click(down_time=_down_time)
-            except Exception as e:
-                logger.warning(f"[鼠标伪装] 点击失败，使用备用方法: {e}")
-                self.pydirect_interaction.click(down_time=_down_time)
+            # 点击后延迟
+            if _after_sleep > 0:
+                logger.debug(f"[_perform_random_click] 点击后延迟: {_after_sleep:.3f}s")
+            self.sleep(_after_sleep)
+            
+            # 如果需要，复原鼠标位置（仅前台模式）
+            if is_foreground and restore_position and original_pos is not None:
+                logger.debug(f"[_perform_random_click] 复原鼠标位置: {original_pos}")
+                self.restore_mouse_position(original_pos, use_trajectory=use_trajectory)
         
-        self.sleep(_after_sleep)
-        
-        # 如果需要，复原鼠标位置
-        if restore_position and original_pos is not None:
-            self.restore_mouse_position(original_pos, use_trajectory=use_trajectory)
-        
-        # 释放鼠标锁，恢复 fidget_action 的鼠标抖动
-        self.fidget_params["mouse_lock"] = False
+        finally:
+            # 无论如何都要释放鼠标锁
+            logger.debug(f"[_perform_random_click] 释放鼠标锁 (mouse_lock=False)")
+            self.fidget_params["mouse_lock"] = False
+            logger.debug(f"[_perform_random_click] ========== 点击完成 ==========")
 
     def click_btn_random(self, box: Box, safe_move_box: Box = None, down_time=0.0, post_sleep=0.0, after_sleep=0.0):
         _safe_move_box = box.copy(x_offset=-box.width*0.20, width_offset=box.width * 8.1,
@@ -1508,11 +1615,23 @@ class BaseDNATask(BaseTask):
             if self.fidget_params.get("mouse_lock", False):
                 return current_drift
             
+            # 后台模式下禁用鼠标抖动，避免干扰PostMessage点击
+            if not self.hwnd.is_foreground():
+                return current_drift
+            
             if not self.afk_config.get("鼠标抖动", True) or self.fidget_params.get("skip_jitter", False):
                 return current_drift
 
+            # 在实际移动鼠标前，二次检查窗口状态（防止多线程竞态条件）
             if self.afk_config.get("鼠标抖动锁定在窗口范围", True):
+                # 二次验证窗口在前台，避免在用户切换窗口的瞬间移动鼠标
+                if not self.hwnd.is_foreground():
+                    return current_drift
                 self.set_mouse_in_window()
+
+            # 执行鼠标抖动前的最后一次窗口状态检查
+            if not self.hwnd.is_foreground():
+                return current_drift
 
             dist_sq = current_drift[0]**2 + current_drift[1]**2
 
