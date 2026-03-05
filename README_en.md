@@ -8,9 +8,9 @@
   
   <p>
     <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform">
-    <img src="https://img.shields.io/badge/python-3.12+-skyblue" alt="Python Version">
-    <img src="https://img.shields.io/github/downloads/BnanZ0/ok-duet-night-abyss/total" alt="Total Downloads">
-    <img src="https://img.shields.io/github/v/release/BnanZ0/ok-duet-night-abyss" alt="Latest Release">
+    <img src="https://img.shields.io/badge/python-3.12-skyblue" alt="Python Version">
+    <a href="https://github.com/BnanZ0/ok-duet-night-abyss/releases"><img src="https://img.shields.io/github/downloads/BnanZ0/ok-duet-night-abyss/total" alt="Total Downloads"></a>
+    <a href="https://github.com/BnanZ0/ok-duet-night-abyss/releases"><img src="https://img.shields.io/github/v/release/BnanZ0/ok-duet-night-abyss" alt="Latest Release"></a>
     <a href="https://discord.gg/vVyCatEBgA"><img alt="Discord" src="https://img.shields.io/discord/296598043787132928?color=5865f2&label=%20Discord"></a>
   </p>
 </div>
